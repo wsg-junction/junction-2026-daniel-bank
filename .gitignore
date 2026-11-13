@@ -1,0 +1,4 @@
+assets/*.csv
+**/node_modules/**
+dist/**
+.DS_STORE
