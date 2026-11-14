@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CUSTOMER_IDS = ("CUST00115", "CUST00047", "CUST00050")
+CUSTOMER_IDS = ("CUST00115", "CUST00047", "CUST00050", "CUST00038", "CUST00117")
 SCHEMAS = {
     "tx_customers_junction.csv": (
         "customer_id customer_postal_code customer_age".split()

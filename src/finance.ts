@@ -1,4 +1,4 @@
-import type { Month, Person } from './data.ts';
+import type { AgeGroupBenchmark, Benchmarks, Month, Person } from './data.ts';
 
 export const euro = (cents: number, compact = false) =>
   new Intl.NumberFormat('en-FI', {
@@ -168,6 +168,10 @@ export function observations(person: Person, month: Month) {
   return insights;
 }
 
+export function peerBenchmark(person: Person, benchmarks: Benchmarks): AgeGroupBenchmark | null {
+  return benchmarks.ageGroups.find(g => person.profile.age >= g.min && person.profile.age <= g.max) ?? null;
+}
+
 export interface Answer { text: string; evidence: string; caveat: string }
 
 /**
@@ -182,6 +186,7 @@ export async function answerQuestionExtended(
     enableLiveAI?: boolean;
     currentTab?: string;
     webContext?: string;
+    benchmarks?: Benchmarks;
     onAgentError?: (error: Error) => void;
   }
 ): Promise<Answer> {
@@ -190,7 +195,7 @@ export async function answerQuestionExtended(
     try {
       // Dynamically import to avoid circular dependencies
       const { buildAgentContext, callAgent } = await import('./agent.ts');
-      const context = buildAgentContext(person, month, options.currentTab, options.webContext);
+      const context = buildAgentContext(person, month, options.currentTab, options.webContext, options.benchmarks);
       const messages = [
         context,
         { role: 'user' as const, content: question },

@@ -2,8 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, PointerEvent, ReactNode } from 'react';
 import { Avatar, Button, Dropdown, Slider } from '@heroui/react';
 import { Particles } from '@/components/ui/particles';
-import { loadPerson, loadTransactions, PEOPLE } from './data';
-import type { Month, Person, Transaction } from './data';
+import { loadBenchmarks, loadPerson, loadTransactions, PEOPLE } from './data';
+import type { Benchmarks, Month, Person, Transaction } from './data';
 import { INSIGHTS } from './insights';
 import type { InsightKey } from './insights';
 
@@ -34,7 +34,7 @@ function Markdown({ text }: { text: string }) {
 }
 import {
   answerQuestion, answerQuestionExtended, averageSpending, basketLabels, baskets, classify, euro, forecast, monthLabel,
-  parseAmount, sandboxBalance, scenario, spendingScenario,
+  parseAmount, peerBenchmark, sandboxBalance, scenario, spendingScenario,
 } from './finance';
 import type { Answer, Basket, Overrides } from './finance';
 import { Icon } from './Icons';
@@ -43,6 +43,7 @@ const BalanceChart = lazy(() => import('./Charts').then(module => ({ default: mo
 const SpendingChart = lazy(() => import('./Charts').then(module => ({ default: module.SpendingChart })));
 const InvestmentChart = lazy(() => import('./Charts').then(module => ({ default: module.InvestmentChart })));
 const SpendingInsights = lazy(() => import('./Charts').then(module => ({ default: module.SpendingInsights })));
+const CashFlowChart = lazy(() => import('./Charts').then(module => ({ default: module.CashFlowChart })));
 const StockTickerLazy = lazy(() => import('./StockTicker').then(module => ({ default: module.StockTicker })));
 const tabs = [
   { id: 'accounts', label: 'Accounts', icon: 'accounts' },
@@ -144,8 +145,17 @@ function Card({ title, children, className = '' }: { title: string; children: Re
   return <section className={`card ${className}`}><h2>{title}</h2>{children}</section>;
 }
 
-function Money({ label, amount, detail }: { label: string; amount: number; detail?: string }) {
-  return <div className="money"><span>{label}</span><strong>{euro(amount)}</strong>{detail && <small>{detail}</small>}</div>;
+function Money({ label, amount, detail, peerAmount, peerLabel }: { label: string; amount: number; detail?: string; peerAmount?: number; peerLabel?: string }) {
+  const delta = peerAmount !== undefined ? amount - peerAmount : null;
+  const deltaClass = delta === null ? '' : delta > 0 ? 'money-delta better' : delta < 0 ? 'money-delta worse' : 'money-delta neutral';
+  return <div className="money">
+    <span>{label}</span>
+    <strong>{euro(amount)}</strong>
+    {detail && <small>{detail}</small>}
+    {peerAmount !== undefined && <small className={deltaClass}>
+      {delta !== null && delta !== 0 ? `${delta > 0 ? '+' : ''}${euro(Math.abs(delta), true)} vs. ` : 'same as '}{peerLabel ?? 'peers'}
+    </small>}
+  </div>;
 }
 
 function InvestmentHeatmap({ person, start, end, onSelect }: {
@@ -193,7 +203,7 @@ function CoachCard({ messages, onSend, onExpand, full = false, loading = false }
       <form className="coach-input" onSubmit={submit}>
         <label htmlFor="coach-question" className="sr-only">Ask the money coach about your finances</label>
         <input id="coach-question" value={input} maxLength={500} onChange={event => setInput(event.target.value)}
-          placeholder="Ask your money" autoComplete="off" disabled={collapsed} />
+          placeholder="Ask your money assistant" autoComplete="off" disabled={collapsed} />
         <Button type="submit" variant="ghost" isIconOnly isDisabled={!input.trim() || collapsed || loading} aria-label="Send question"><Icon name="arrow" size={18} /></Button>
         {onExpand && <Button variant="ghost" isIconOnly isDisabled={collapsed || loading} aria-label="Open full conversation" onPress={onExpand}><Icon name="expand" size={18} /></Button>}
         {hasContent && <Button variant="ghost" isIconOnly aria-label={collapsed ? 'Expand chat' : 'Collapse chat'} onPress={() => setCollapsed(v => !v)}><Icon name={collapsed ? 'dropdown' : 'chevron-up'} size={18} /></Button>}
@@ -233,6 +243,92 @@ function CoachPage({ thread, threads, onSend, onChoose, onHistory, onBack, histo
       <CoachCard key={thread.id} full messages={thread.messages} onSend={onSend} loading={loading} />
     </> : <p className="empty">Choose a conversation from All chats or start one from a finance page.</p>}
   </section>;
+}
+
+function BenchmarkCard({ person, benchmarks, months }: { person: Person; benchmarks: Benchmarks; months: Month[] }) {
+  const peer = peerBenchmark(person, benchmarks);
+  if (!peer) return null;
+
+  const recentMonths = months.slice(-3);
+  const userAvgIncome = Math.round(recentMonths.reduce((s, m) => s + m.incomeCents, 0) / recentMonths.length);
+  const userAvgSpending = Math.round(recentMonths.reduce((s, m) => s + m.consumptionCents, 0) / recentMonths.length);
+  const userSavingsRate = userAvgIncome > 0 ? ((userAvgIncome - userAvgSpending) / userAvgIncome * 100) : 0;
+  const userSpendingRate = userAvgIncome > 0 ? (userAvgSpending / userAvgIncome * 100) : 0;
+  const peerSpendingRate = peer.avgIncomeCents > 0 ? (peer.avgSpendingCents / peer.avgIncomeCents * 100) : 0;
+  const savingsDelta = userSavingsRate - peer.savingsRate;
+
+  const totalDiscCents = recentMonths.reduce((s, m) => {
+    const disc = ['Restaurants', 'Entertainment', 'Lifestyle', 'Travel'];
+    return s + disc.reduce((a, c) => a + (m.categorySpendingCents[c] ?? 0), 0);
+  }, 0);
+  const userDiscPct = userAvgSpending > 0 ? (totalDiscCents / recentMonths.length / userAvgSpending * 100) : 0;
+  const discDelta = userDiscPct - benchmarks.population.avgDiscretionaryPercentage;
+
+  const tag = (delta: number, goodIfPositive: boolean, suffix = '') => {
+    const good = (delta > 0) === goodIfPositive;
+    const cls = Math.abs(delta) < 0.5 ? 'delta-tag neutral' : good ? 'delta-tag better' : 'delta-tag worse';
+    const sign = delta > 0 ? '+' : '';
+    return <span className={cls}>{sign}{delta.toFixed(1)}{suffix}</span>;
+  };
+
+  return <div className="benchmark-card animate-in">
+    <div className="benchmark-header">
+      <div>
+        <span className="benchmark-title">You vs. peers aged {peer.label}</span>
+        <span className="benchmark-meta">Based on {peer.n} customers · last 3 months · synthetic data</span>
+      </div>
+    </div>
+    <div className="benchmark-rows">
+      <div className="benchmark-row">
+        <div className="brow-labels">
+          <span>Spending rate <small>(% of income)</small></span>
+          <div className="brow-values">
+            <strong>{userSpendingRate.toFixed(1)}%</strong>
+            <span className="brow-peer">Peer avg {peerSpendingRate.toFixed(1)}%</span>
+          </div>
+        </div>
+        <div className="brow-bars">
+          <div className="bbar-track"><div className="bbar-fill you" style={{ width: `${Math.min(userSpendingRate, 100)}%` }} /><span className="bbar-label">You</span></div>
+          <div className="bbar-track peer"><div className="bbar-fill peer" style={{ width: `${Math.min(peerSpendingRate, 100)}%` }} /><span className="bbar-label">Peers</span></div>
+        </div>
+      </div>
+      <div className="benchmark-row">
+        <div className="brow-labels">
+          <span>Monthly income <small>(EUR)</small></span>
+          <div className="brow-values">
+            <strong>{euro(userAvgIncome, true)}</strong>
+            <span className="brow-peer">Peer avg {euro(peer.avgIncomeCents, true)}</span>
+          </div>
+        </div>
+        <div className="brow-bars">
+          {(() => {
+            const maxIncome = Math.max(userAvgIncome, peer.avgIncomeCents, 1);
+            return <>
+              <div className="bbar-track"><div className="bbar-fill you" style={{ width: `${userAvgIncome / maxIncome * 100}%` }} /><span className="bbar-label">You</span></div>
+              <div className="bbar-track peer"><div className="bbar-fill peer" style={{ width: `${peer.avgIncomeCents / maxIncome * 100}%` }} /><span className="bbar-label">Peers</span></div>
+            </>;
+          })()}
+        </div>
+      </div>
+    </div>
+    <div className="benchmark-kpis">
+      <div className="benchmark-kpi">
+        <span className="bkpi-label">Savings rate</span>
+        <strong className="bkpi-value">{userSavingsRate.toFixed(1)}%</strong>
+        <div className="bkpi-peer">Peer avg {peer.savingsRate}% {tag(savingsDelta, true, 'pp')}</div>
+      </div>
+      <div className="benchmark-kpi">
+        <span className="bkpi-label">Discretionary</span>
+        <strong className="bkpi-value">{userDiscPct.toFixed(1)}%</strong>
+        <div className="bkpi-peer">Pop. avg {benchmarks.population.avgDiscretionaryPercentage}% {tag(-discDelta, true, 'pp')}</div>
+      </div>
+      <div className="benchmark-kpi">
+        <span className="bkpi-label">Monthly income</span>
+        <strong className="bkpi-value">{euro(userAvgIncome, true)}</strong>
+        <div className="bkpi-peer">Peer avg {euro(peer.avgIncomeCents, true)}</div>
+      </div>
+    </div>
+  </div>;
 }
 
 function Transactions({ person, months, mode = 'all' }: { person: Person; months: Month[]; mode?: 'all' | 'payments' | 'investments' }) {
@@ -286,7 +382,7 @@ function Transactions({ person, months, mode = 'all' }: { person: Person; months
   </>;
 }
 
-function Workbench({ person, months, tab, onChooseMonth }: { person: Person; months: Month[]; tab: Tab; onChooseMonth: (month: string) => void }) {
+function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person: Person; months: Month[]; tab: Tab; onChooseMonth: (month: string) => void; benchmarks: Benchmarks | null }) {
   const month = months.at(-1)!;
   const start = months[0].month;
   const spendingBaseline = { ...month, ...averageSpending(months) };
@@ -298,6 +394,8 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
     withdrawals: totals.withdrawals + item.investmentWithdrawalsCents,
     sweeps: totals.sweeps + item.salarySweepsCents,
   }), { income: 0, consumption: 0, cashFlow: 0, deposits: 0, withdrawals: 0, sweeps: 0 });
+  const peer = benchmarks ? peerBenchmark(person, benchmarks) : null;
+  const peerLabel = peer ? `peers ${peer.label}` : undefined;
   const [category, setCategory] = useState('Restaurants');
   const [reductions, setReductions] = useState<Record<string, number>>({});
   const [overrides, setOverrides] = useState<Overrides>({});
@@ -343,8 +441,12 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
           detail={`Recorded ${month.balanceObservedAt.slice(0, 10)} · not a live balance`} /></div>
         <Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={person.monthly} start={start} cutoff={month.month} /></Suspense>
         <details><summary>Cash flow & mortgage context</summary>
-          <div className="stat-row"><Money label="Income in selected months" amount={rangeTotals.income} />
-            <Money label="Spending in selected months" amount={rangeTotals.consumption} /><Money label="Net cash flow, including transfers" amount={rangeTotals.cashFlow} /></div>
+          <Suspense fallback={<p role="status">Loading chart…</p>}><CashFlowChart months={person.monthly} cutoff={month.month} peerIncomeCents={peer?.avgIncomeCents} peerSpendingCents={peer?.avgSpendingCents} /></Suspense>
+          <div className="stat-row">
+            <Money label="Income in selected months" amount={rangeTotals.income} peerAmount={peer ? peer.avgIncomeCents * months.length : undefined} peerLabel={peerLabel} />
+            <Money label="Spending in selected months" amount={rangeTotals.consumption} peerAmount={peer ? peer.avgSpendingCents * months.length : undefined} peerLabel={peerLabel} />
+            <Money label="Net cash flow, including transfers" amount={rangeTotals.cashFlow} />
+          </div>
           <p className="note">{person.coverage.observedAccountCount} observed account · EUR · synthetic data.
             {answerQuestion(person, month, 'Explain my mortgage').text}</p>
         </details>
@@ -352,6 +454,7 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
           <p className="note">Test payments of {euro(paymentTotal)} and an extra contribution of {euro(contribution)} would leave {euro(balance)}.
             The recorded balance and transaction history are unchanged.</p></details>}
       </Card>
+      {benchmarks && <BenchmarkCard person={person} benchmarks={benchmarks} months={months} />}
       <Card title="Transactions" className="animate-in"><Transactions person={person} months={months} /></Card>
     </>}
     {tab === 'spending' && <>
@@ -390,7 +493,7 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
       </Card>
       <Card title="Spending patterns" className="animate-in">
         <Suspense fallback={<p role="status">Loading spending insights…</p>}><SpendingInsights
-          months={months} reductions={reductions} selected={category} /></Suspense>
+          months={months} reductions={reductions} selected={category} peerSpendingCents={peer?.avgSpendingCents} peerIncomeCents={peer?.avgIncomeCents} /></Suspense>
       </Card>
       <Card title="Three months ahead" className="animate-in">
         {model && baseline ? <><Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={person.monthly} cutoff={month.month}
@@ -405,6 +508,7 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
             No bill dates, missing obligations, returns or fees are predicted. Negative forecasts are retained.</p></details></>
           : <p className="empty">Select a later month. At least four observed months are needed for a forecast and historical check.</p>}
       </Card>
+      {benchmarks && <BenchmarkCard person={person} benchmarks={benchmarks} months={months} />}
       <details className="basket-details"><summary>Sort spending into three baskets</summary>
         <p className="note">Tentative suggestions, not proven necessities. You decide what fits; ambiguous categories stay unclassified.</p>
         <dl className="basket-totals">{(Object.keys(basketLabels) as Basket[]).map(basket =>
@@ -481,16 +585,16 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
   </>;
 }
 
-function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onExpand, loading }: {
+function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onExpand, loading, benchmarks }: {
   person: Person; tab: Tab; period: Period; onPeriodChange: (period: Period) => void;
-  messages: ChatMessage[]; onSend: (question: string) => void; onExpand: () => void; loading: boolean;
+  messages: ChatMessage[]; onSend: (question: string) => void; onExpand: () => void; loading: boolean; benchmarks: Benchmarks | null;
 }) {
   const months = useMemo(() => person.monthly.slice(period.start, period.end + 1), [person, period.start, period.end]);
   return <>
     <h1 className="sr-only">{tabs.find(item => item.id === tab)!.label}</h1>
     <div className="dashboard-layout">
       <div className="dashboard-main">
-        <Workbench key={`${period.start}-${period.end}`} person={person} months={months} tab={tab} onChooseMonth={month => {
+        <Workbench key={`${period.start}-${period.end}`} person={person} months={months} tab={tab} benchmarks={benchmarks} onChooseMonth={month => {
           const index = person.monthly.findIndex(item => item.month === month);
           if (index < 0) throw new Error('Unknown investment calendar month.');
           onPeriodChange({ start: index, end: index });
@@ -518,7 +622,7 @@ export default function App() {
   const [periodPreview, setPeriodPreview] = useState<Period | null>(null);
   const [rangeHidden, setRangeHidden] = useState(false);
   const lastMonth = (person?.monthly.length ?? 1) - 1;
-  const period = selection ?? { start: Math.max(0, lastMonth - 1), end: lastMonth };
+  const period = selection ?? { start: Math.max(0, lastMonth - 11), end: lastMonth };
   const displayedPeriod = periodPreview ?? period;
   const [chats, setChats] = useState<Record<string, ChatThread>>({});
   const [activeChat, setActiveChat] = useState<string | null>(null);
@@ -526,6 +630,7 @@ export default function App() {
   const [aiMode, setAiMode] = useState<'auto' | 'local'>('auto');
   const [loadingChat, setLoadingChat] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(() => document.documentElement.getAttribute('data-mode') === 'dark');
+  const [benchmarks, setBenchmarks] = useState<Benchmarks | null>(null);
   const sessionVisited = useRef<Set<string>>(new Set());
   const isFinancePage = tab !== 'ai' && tab !== 'ai-history';
   const chatKey = `${userId}:${period.start}:${period.end}:${tab}`;
@@ -554,6 +659,7 @@ export default function App() {
         enableLiveAI: aiMode === 'auto',
         currentTab,
         webContext,
+        benchmarks: benchmarks ?? undefined,
       })
     ).then(answer => {
       const message = { question, answer };
@@ -572,6 +678,9 @@ export default function App() {
     });
     observer.observe(bar);
     return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    loadBenchmarks().then(setBenchmarks).catch(() => { /* benchmarks are optional; fail silently */ });
   }, []);
   useEffect(() => {
     const controller = new AbortController();
@@ -697,7 +806,7 @@ export default function App() {
     <main id="main" ref={main} tabIndex={-1}>{person?.userId === userId
       ? isFinancePage ? <Dashboard key={userId} person={person} tab={tab} period={period} onPeriodChange={setSelection}
         messages={chats[chatKey]?.messages ?? []} onSend={question => sendQuestion(question, chatKey, createThread())}
-        loading={loadingChat === chatKey}
+        loading={loadingChat === chatKey} benchmarks={benchmarks}
         onExpand={() => {
           const thread = chats[chatKey] ?? createThread();
           setChats(items => ({ ...items, [chatKey]: items[chatKey] ?? thread }));

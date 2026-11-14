@@ -37,10 +37,43 @@ export interface Person {
   hasSkippedRows: boolean;
 }
 
+export interface AgeGroupBenchmark {
+  label: string;
+  min: number;
+  max: number;
+  n: number;
+  avgIncomeCents: number;
+  avgSpendingCents: number;
+  savingsRate: number;
+  topCats: string[];
+}
+
+export interface Benchmarks {
+  ageGroups: AgeGroupBenchmark[];
+  population: {
+    basketShares: { mandatoryRegular: number; mandatoryIrregular: number; discretionary: number };
+    avgDiscretionaryPercentage: number;
+    n: number;
+  };
+}
+
+let benchmarksCache: Benchmarks | null = null;
+
+export async function loadBenchmarks(): Promise<Benchmarks> {
+  if (benchmarksCache) return benchmarksCache;
+  const response = await fetch(`${import.meta.env.BASE_URL}demo/benchmarks.json`);
+  if (!response.ok) throw new Error('Could not load benchmarks.');
+  const value = await response.json() as Benchmarks;
+  benchmarksCache = value;
+  return value;
+}
+
 export const PEOPLE = [
-  { id: 'CUST00115', name: 'Alex', initials: 'AL', color: 'sage', description: 'Home & longer-term plans' },
-  { id: 'CUST00047', name: 'Robin', initials: 'RO', color: 'lavender', description: 'Spending & transfers' },
-  { id: 'CUST00050', name: 'Noa', initials: 'NO', color: 'peach', description: 'Life & investments' },
+  { id: 'CUST00115', name: 'Alex', initials: 'AL', color: 'sage', description: 'Saver · mortgage' },
+  { id: 'CUST00047', name: 'Robin', initials: 'RO', color: 'lavender', description: 'Spender · transfers' },
+  { id: 'CUST00050', name: 'Noa', initials: 'NO', color: 'peach', description: 'Young · investing' },
+  { id: 'CUST00038', name: 'Sam', initials: 'SA', color: 'sky', description: 'Family budget · mortgage' },
+  { id: 'CUST00117', name: 'Maya', initials: 'MA', color: 'rose', description: 'Young professional' },
 ] as const;
 
 function record(value: unknown): value is Record<string, unknown> {

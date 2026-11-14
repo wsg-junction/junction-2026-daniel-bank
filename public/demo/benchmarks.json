@@ -1,0 +1,73 @@
+{
+  "ageGroups": [
+    {
+      "label": "18–25",
+      "min": 18,
+      "max": 25,
+      "n": 9,
+      "avgIncomeCents": 398400,
+      "avgSpendingCents": 353700,
+      "savingsRate": 9.7,
+      "topCats": ["Housing", "Groceries", "Restaurants"]
+    },
+    {
+      "label": "26–35",
+      "min": 26,
+      "max": 35,
+      "n": 18,
+      "avgIncomeCents": 489000,
+      "avgSpendingCents": 462600,
+      "savingsRate": 5.5,
+      "topCats": ["Housing", "Groceries", "Restaurants"]
+    },
+    {
+      "label": "36–45",
+      "min": 36,
+      "max": 45,
+      "n": 56,
+      "avgIncomeCents": 668400,
+      "avgSpendingCents": 628800,
+      "savingsRate": 5.6,
+      "topCats": ["Housing", "Groceries", "Transportation"]
+    },
+    {
+      "label": "46–55",
+      "min": 46,
+      "max": 55,
+      "n": 46,
+      "avgIncomeCents": 781100,
+      "avgSpendingCents": 696300,
+      "savingsRate": 10.4,
+      "topCats": ["Housing", "Groceries", "Restaurants"]
+    },
+    {
+      "label": "56–70",
+      "min": 56,
+      "max": 70,
+      "n": 9,
+      "avgIncomeCents": 758300,
+      "avgSpendingCents": 742800,
+      "savingsRate": 3.2,
+      "topCats": ["Housing", "Groceries", "Salary Sweep"]
+    },
+    {
+      "label": "70+",
+      "min": 70,
+      "max": 99,
+      "n": 6,
+      "avgIncomeCents": 488200,
+      "avgSpendingCents": 440100,
+      "savingsRate": 10.0,
+      "topCats": ["Housing", "Groceries", "Health"]
+    }
+  ],
+  "population": {
+    "basketShares": {
+      "mandatoryRegular": 36.8,
+      "mandatoryIrregular": 9.5,
+      "discretionary": 21.7
+    },
+    "avgDiscretionaryPercentage": 21.7,
+    "n": 142
+  }
+}

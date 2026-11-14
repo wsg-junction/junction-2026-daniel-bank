@@ -12,6 +12,8 @@ DEMO_PROFILES = {
     "CUST00115": {"name": "Alex", "initials": "AL", "color": "sage", "description": "Home & longer-term plans"},
     "CUST00047": {"name": "Robin", "initials": "RO", "color": "lavender", "description": "Everyday spending & transfers"},
     "CUST00050": {"name": "Noa", "initials": "NO", "color": "peach", "description": "Everyday life & investments"},
+    "CUST00038": {"name": "Sam", "initials": "SA", "color": "sky", "description": "Family budget · mortgage"},
+    "CUST00117": {"name": "Maya", "initials": "MA", "color": "rose", "description": "Young professional"},
 }
 
 

@@ -1,6 +1,6 @@
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart,
-  Line, Pie, PieChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Line, Pie, PieChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { useState } from 'react';
 import { Button } from '@heroui/react';
@@ -8,7 +8,7 @@ import type { Month } from './data';
 import { averageSpending, euro, forecast, monthLabel, palette, spendingScenario } from './finance';
 
 const tick = { fill: '#53616f', fontSize: 11, fontFamily: 'inherit' };
-const grid = { stroke: '#edf0eb', strokeDasharray: '3 5', vertical: false };
+const grid = { stroke: '#edf0eb', strokeOpacity: 0.12, strokeDasharray: '3 5', vertical: false };
 const tooltipStyle = { borderRadius: 14, border: '1px solid #e5ebe3', boxShadow: '0 8px 30px #173f3510', fontSize: 12 };
 const moneyTick = (value: number) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value / 100);
 const labelTick = (value: string) => monthLabel(value, true).split(' ')[0];
@@ -149,24 +149,30 @@ export function InvestmentChart({ months, cutoff, start }: { months: Month[]; cu
   </>;
 }
 
-export function SpendingInsights({ months, reductions, selected }: {
-  months: Month[]; reductions: Record<string, number>; selected: string;
+export function SpendingInsights({ months, reductions, selected, peerSpendingCents, peerIncomeCents }: {
+  months: Month[]; reductions: Record<string, number>; selected: string; peerSpendingCents?: number; peerIncomeCents?: number;
 }) {
   const [view, setView] = useState<'trend' | 'radar'>('trend');
+  const [showPeer, setShowPeer] = useState(true);
+  const peerSpendingRate = (peerIncomeCents && peerIncomeCents > 0 && peerSpendingCents !== undefined)
+    ? peerSpendingCents / peerIncomeCents : null;
   const data = months.map(month => {
     const adjusted = spendingScenario(month, reductions).month;
     return { month: month.month, recorded: month.consumptionCents, adjusted: adjusted.consumptionCents,
-      category: adjusted.categorySpendingCents[selected] ?? 0 };
+      category: adjusted.categorySpendingCents[selected] ?? 0,
+      peerCurve: peerSpendingRate !== null ? Math.round(month.incomeCents * peerSpendingRate) : undefined };
   });
   const baseline = { ...months.at(-1)!, ...averageSpending(months) };
   const adjusted = spendingScenario(baseline, reductions).month;
   const profile = Object.entries(baseline.categorySpendingCents)
     .map(([category, recorded]) => ({ category, recorded, adjusted: adjusted.categorySpendingCents[category] }));
+  const hasPeer = peerSpendingRate !== null;
   return <>
     <div className="chart-view-controls" role="group" aria-label="Spending visualization">
       <Button variant="outline" aria-pressed={view === 'trend'} onPress={() => setView('trend')}>Area trend</Button>
       <Button variant="outline" aria-pressed={view === 'radar'} onPress={() => setView('radar')}>Radar profile</Button>
     </div>
+    {hasPeer && view === 'trend' && <label className="expense-toggle"><input type="checkbox" checked={showPeer} onChange={e => setShowPeer(e.target.checked)} />Show peer avg spending curve</label>}
     <div className="chart" role="img" aria-label={view === 'trend'
       ? `Recorded and adjusted total spending in the selected months, with adjusted ${selected} spending. Exact values below.`
       : 'Average monthly category spending: recorded versus with your reductions. Exact values below.'}>
@@ -186,6 +192,7 @@ export function SpendingInsights({ months, reductions, selected }: {
           <Area type="monotone" dataKey="adjusted" name="With your reductions" stroke="#176343" fill="url(#spendingAdjusted)" strokeWidth={2}
             dot={data.length === 1 ? { r: 4 } : false} isAnimationActive={false} />
           <Line type="monotone" dataKey="category" name={`${selected} with reductions`} stroke="#a04b14" strokeDasharray="4 4" dot={{ r: 3 }} isAnimationActive={false} />
+          {showPeer && hasPeer && <Line type="monotone" dataKey="peerCurve" name="Peer avg spending (% of your income)" stroke="#8b73b1" strokeDasharray="5 3" strokeWidth={1.5} dot={false} isAnimationActive={false} />}
         </ComposedChart> : <RadarChart data={profile} outerRadius="62%" margin={{ top: 16, bottom: 16, left: 24, right: 24 }}>
           <PolarGrid stroke="#dce2e8" />
           <PolarAngleAxis dataKey="category" tick={{ ...tick, fontSize: 10 }} tickFormatter={name => String(name).length > 12 ? `${String(name).slice(0, 10)}…` : String(name)} />
@@ -198,7 +205,9 @@ export function SpendingInsights({ months, reductions, selected }: {
     </div>
     <div className="chart-legend"><span><i style={{ background: '#305dc0' }} />Recorded{view === 'radar' ? ' monthly average' : ' total'}</span>
       <span><i style={{ background: '#176343' }} />With reductions</span>
-      {view === 'trend' && <span><i style={{ background: '#a04b14' }} />{selected} with reductions</span>}</div>
+      {view === 'trend' && <span><i style={{ background: '#a04b14' }} />{selected} with reductions</span>}
+      {view === 'trend' && showPeer && hasPeer && <span><i style={{ background: '#8b73b1' }} />Peer avg (% of income)</span>}
+    </div>
     <p className="note">{view === 'trend' ? 'Your percentages are applied separately to each historical month. Change the category above to inspect its line.'
       : 'Each spoke is a category in EUR per month, not a spending score. Larger shapes mean higher spending, not better performance.'}</p>
     <details className="data-details"><summary>View exact spending insights</summary>
@@ -212,9 +221,12 @@ export function SpendingInsights({ months, reductions, selected }: {
   </>;
 }
 
-export function CashFlowChart({ months, cutoff }: { months: Month[]; cutoff: string }) {
+export function CashFlowChart({ months, cutoff, peerIncomeCents, peerSpendingCents }: { months: Month[]; cutoff: string; peerIncomeCents?: number; peerSpendingCents?: number }) {
+  const [showPeer, setShowPeer] = useState(peerIncomeCents !== undefined || peerSpendingCents !== undefined);
   const data = months.filter(month => month.month <= cutoff).slice(-6);
+  const hasPeer = peerIncomeCents !== undefined || peerSpendingCents !== undefined;
   return <>
+    {hasPeer && <label className="expense-toggle"><input type="checkbox" checked={showPeer} onChange={e => setShowPeer(e.target.checked)} />Show peer averages</label>}
     <div className="chart cashflow-chart" role="img" aria-label="Six-month income and consumption comparison. Transfers are excluded. Exact numbers below.">
       <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <BarChart data={data} margin={{ top: 12, right: 0, left: 0, bottom: 0 }} barGap={4}>
@@ -225,11 +237,15 @@ export function CashFlowChart({ months, cutoff }: { months: Month[]; cutoff: str
             contentStyle={tooltipStyle} cursor={{ fill: '#f4f6f1' }} />
           <Bar dataKey="incomeCents" name="Income" fill="#326e56" radius={[5, 5, 0, 0]} maxBarSize={22} isAnimationActive={false} />
           <Bar dataKey="consumptionCents" name="Consumption" fill="#c8b9e4" radius={[5, 5, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+          {showPeer && peerIncomeCents !== undefined && <ReferenceLine y={peerIncomeCents} stroke="#326e56" strokeDasharray="4 3" strokeWidth={1.5} label={{ value: 'Peer income', position: 'insideTopRight', fontSize: 10, fill: '#326e56' }} />}
+          {showPeer && peerSpendingCents !== undefined && <ReferenceLine y={peerSpendingCents} stroke="#8b73b1" strokeDasharray="4 3" strokeWidth={1.5} label={{ value: 'Peer spending', position: 'insideTopRight', fontSize: 10, fill: '#8b73b1' }} />}
         </BarChart>
       </ResponsiveContainer>
     </div>
     <div className="chart-legend"><span><i style={{ background: '#326e56' }} />Income</span>
-      <span><i style={{ background: '#c8b9e4' }} />Consumption</span><span className="legend-unit">EUR</span></div>
+      <span><i style={{ background: '#c8b9e4' }} />Consumption</span>
+      {showPeer && hasPeer && <><span><i style={{ background: '#326e56', opacity: 0.4 }} />Peer avg income</span><span><i style={{ background: '#8b73b1', opacity: 0.4 }} />Peer avg spending</span></>}
+      <span className="legend-unit">EUR</span></div>
     <details className="data-details"><summary>View exact cash flow</summary>
       <div className="table-scroll"><table><thead><tr><th>Month</th><th>Income</th><th>Consumption</th><th>Net after transfers</th></tr></thead>
         <tbody>{data.map(month => <tr key={month.month}><td>{monthLabel(month.month, true)}</td><td>{euro(month.incomeCents)}</td>

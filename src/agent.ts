@@ -1,4 +1,4 @@
-import type { Person, Month } from './data';
+import type { Person, Month, Benchmarks } from './data';
 
 /**
  * AI Agent Service
@@ -151,12 +151,14 @@ const ENDPOINTS = [
 /**
  * Build system context based on the current tab and user's financial data
  */
-export function buildAgentContext(person: Person, month: Month, tab: string, webContext?: string): AgentMessage {
+export function buildAgentContext(person: Person, month: Month, tab: string, webContext?: string, benchmarks?: Benchmarks): AgentMessage {
   const summaryText = buildContextSummary(person, month, tab);
 
   const webSection = webContext
     ? `\n\n## Live web context\nCurrent financial information from web search to help ground your answer:\n<webcontext>\n${webContext}\n</webcontext>\nCite relevant facts. Prioritize the user's own transaction data for personal questions; use web context for general financial knowledge, rates, and market conditions.`
     : '';
+
+  const peerSection = benchmarks ? buildPeerSection(person, benchmarks) : '';
 
   return {
     role: 'system',
@@ -172,7 +174,7 @@ USER PROFILE:
 
 CURRENT TAB & CONTEXT:
 The user is viewing the "${tab}" tab on ${new Date(month.balanceObservedAt).toLocaleDateString()}.
-${summaryText}${webSection}
+${summaryText}${peerSection}${webSection}
 
 IMPORTANT GUIDELINES:
 1. Ground all answers in the user's actual transaction data shown above
@@ -185,6 +187,7 @@ IMPORTANT GUIDELINES:
 8. When uncertain, say so and explain why the data doesn't provide a clear answer
 9. Suggest checking with a financial advisor for major decisions
 10. Never present this as guaranteed financial advice
+11. When comparing to peers, always mention the group size (n=X) and that this is synthetic data
 
 SPENDING BASKETS (help users categorize):
 - Essential & regular: Housing, Utilities, Insurance
@@ -194,6 +197,22 @@ SPENDING BASKETS (help users categorize):
 
 When discussing spending, help categorize it into these baskets and highlight where the user might find flexibility.`,
   };
+}
+
+function buildPeerSection(person: Person, benchmarks: Benchmarks): string {
+  const group = benchmarks.ageGroups.find(g => person.profile.age >= g.min && person.profile.age <= g.max);
+  if (!group) return '';
+  const { euro } = getFormatters();
+  return `
+
+PEER BENCHMARKS — age group ${group.label} (n=${group.n} customers in this synthetic dataset):
+- Avg monthly income: ${euro(group.avgIncomeCents)}
+- Avg monthly spending: ${euro(group.avgSpendingCents)}
+- Avg savings rate: ${group.savingsRate}%
+- Top spending categories for this age group: ${group.topCats.join(', ')}
+- Population-wide discretionary spending (Restaurants + Entertainment + Lifestyle): ${benchmarks.population.avgDiscretionaryPercentage}% of total spending on average
+
+Use these benchmarks to give the user context on whether their patterns are typical or unusual for their age group. Always note that these are from a synthetic dataset of ${benchmarks.population.n} customers. Don't over-index on small differences; flag meaningful gaps (e.g. >5pp difference in savings rate).`;
 }
 
 /**
