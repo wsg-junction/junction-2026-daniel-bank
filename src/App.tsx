@@ -696,7 +696,7 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk, onIn
           }}><Icon name="reset" size={16} />Clear test payments</Button></>}
         <p className="note">Switching person or month, or refreshing, clears them. No payment network is connected.</p>
       </Card></div>
-      {payments.length > 0 && model && <Card title="Balance forecast with your payments" className="animate-in">
+      {model && <Card title="Balance forecast with your payments" className="animate-in">
         <Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={sandboxMonthly} cutoff={month.month}
           start={start} prediction monthlySaving={combined.saving} /></Suspense>
         <div className="comparison" role="status" aria-live="polite">

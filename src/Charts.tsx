@@ -223,7 +223,7 @@ export function SpendingInsights({ months, reductions, selected, peerSpendingCen
 }
 
 export function CashFlowChart({ months, cutoff, peerIncomeCents, peerSpendingCents }: { months: Month[]; cutoff: string; peerIncomeCents?: number; peerSpendingCents?: number }) {
-  const [showPeer, setShowPeer] = useState(peerIncomeCents !== undefined || peerSpendingCents !== undefined);
+  const [showPeer, setShowPeer] = useState(false);
   const data = months.filter(month => month.month <= cutoff).slice(-6);
   const hasPeer = peerIncomeCents !== undefined || peerSpendingCents !== undefined;
   return <>
