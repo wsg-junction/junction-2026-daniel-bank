@@ -45,34 +45,19 @@ const STOCK_SYMBOLS: Record<string, string> = {
  * Returns best-match headline per company, gracefully returns [] on any error.
  */
 export async function searchStockPrices(): Promise<StockSearchResult[]> {
-  const apiKey = (import.meta as { env?: Record<string, string> }).env?.VITE_CONTEXT_DEV_API_KEY;
-  if (!apiKey) return [];
-
   try {
-    const res = await fetch(CONTEXT_DEV_API, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        query: 'Nokia Nordea Neste Sampo Fortum Helsinki stock news today',
-        numResults: 10,
-        freshness: 'last_week',
-        highlightsOptions: { enabled: true, maxCharacters: 400 },
-      }),
-    });
+    const q = encodeURIComponent('Nokia Nordea Neste Sampo Fortum Helsinki stock news today');
+    const res = await fetch(`${PROXY_BASE}/search?q=${q}`);
     if (!res.ok) return [];
-    const data: { results?: Array<{ title: string; url: string; description: string }> } = await res.json();
+    const data: { json_content?: { suggestions?: Array<{ name?: string; description?: string }> } } = await res.json();
+    const suggestions = data.json_content?.suggestions ?? [];
     const results: StockSearchResult[] = [];
     for (const [name, symbol] of Object.entries(STOCK_SYMBOLS)) {
-      const match = data.results?.find(r =>
-        r.title.toLowerCase().includes(name.toLowerCase()) ||
-        r.description.toLowerCase().includes(name.toLowerCase())
+      const match = suggestions.find(s =>
+        s.name?.toLowerCase().includes(name.toLowerCase()) ||
+        s.description?.toLowerCase().includes(name.toLowerCase())
       );
-      if (match) {
-        results.push({ symbol, headline: match.title, url: match.url });
-      }
+      if (match) results.push({ symbol, headline: match.name ?? '', url: '' });
     }
     return results;
   } catch {

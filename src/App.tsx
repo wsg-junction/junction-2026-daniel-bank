@@ -142,8 +142,11 @@ function currentTab(): Page {
   return tabs.find(tab => tab.id === hash)?.id ?? legacy[hash] ?? 'accounts';
 }
 
-function Card({ title, children, className = '' }: { title: string; children: ReactNode; className?: string }) {
-  return <section className={`card ${className}`}><h2>{title}</h2>{children}</section>;
+function Card({ title, children, className = '', onAsk }: { title: string; children: ReactNode; className?: string; onAsk?: () => void }) {
+  return <section className={`card ${className}`}>
+    {onAsk ? <div className="card-header"><h2>{title}</h2><button className="card-ask-btn" aria-label={`Ask AI about ${title}`} onClick={onAsk}><Icon name="sparkle" size={14} /></button></div> : <h2>{title}</h2>}
+    {children}
+  </section>;
 }
 
 function Money({ label, amount, detail, peerAmount, peerLabel }: { label: string; amount: number; detail?: string; peerAmount?: number; peerLabel?: string }) {
@@ -183,8 +186,8 @@ function InvestmentHeatmap({ person, start, end, onSelect }: {
   </>;
 }
 
-function CoachCard({ messages, onSend, onExpand, full = false, loading = false, loadingPhase }: {
-  messages: ChatMessage[]; onSend: (question: string) => void; onExpand?: () => void; full?: boolean; loading?: boolean; loadingPhase?: 'searching' | 'thinking' | null;
+function CoachCard({ messages, onSend, onExpand, onClear, full = false, loading = false, loadingPhase }: {
+  messages: ChatMessage[]; onSend: (question: string) => void; onExpand?: () => void; onClear?: () => void; full?: boolean; loading?: boolean; loadingPhase?: 'searching' | 'thinking' | null;
 }) {
   const [input, setInput] = useState('');
   const [collapsed, setCollapsed] = useState(false);
@@ -220,6 +223,7 @@ function CoachCard({ messages, onSend, onExpand, full = false, loading = false, 
     </div>
     <div className="coach-footer">
       <span />
+      {messages.length > 0 && onClear && <Button variant="ghost" className="coach-clear" onPress={onClear} aria-label="Clear conversation"><Icon name="reset" size={13} />Clear</Button>}
     </div></>}
   </section>;
 }
@@ -383,7 +387,7 @@ function Transactions({ person, months, mode = 'all' }: { person: Person; months
   </>;
 }
 
-function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person: Person; months: Month[]; tab: Tab; onChooseMonth: (month: string) => void; benchmarks: Benchmarks | null }) {
+function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk }: { person: Person; months: Month[]; tab: Tab; onChooseMonth: (month: string) => void; benchmarks: Benchmarks | null; onAsk?: (question: string) => void }) {
   const month = months.at(-1)!;
   const start = months[0].month;
   const spendingBaseline = { ...month, ...averageSpending(months) };
@@ -458,7 +462,7 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
   return <>
     <p className="sr-only" role="status" aria-live="polite">{notice}</p>
     {tab === 'accounts' && <>
-      <Card title="Account balance" className="animate-in hero-card">
+      <Card title="Account balance" className="animate-in hero-card" onAsk={onAsk && (() => onAsk('Give me a quick summary of my account balance and recent cash flow trend.'))}>
         <div className="account-balance"><Money
           label={outflow > 0 ? 'Balance after your experiments' : 'Observed account balance'}
           amount={outflow > 0 ? balance : month.closingBalanceCents}
@@ -484,7 +488,7 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
       <Card title="Transactions" className="animate-in"><Transactions person={person} months={months} /></Card>
     </>}
     {tab === 'spending' && <>
-      <Card title={combined.saving ? 'Your spending experiment' : 'Spending mix'} className="animate-in hero-card spending-card">
+      <Card title={combined.saving ? 'Your spending experiment' : 'Spending mix'} className="animate-in hero-card spending-card" onAsk={onAsk && (() => onAsk('What does my current spending mix look like? Any category I should watch?'))}>
         <div className="spending-playground">
         <Suspense fallback={<p role="status">Loading chart…</p>}><SpendingChart compact averaged={months.length > 1} month={revisedMonth}
           savings={combined.savings} selected={category} onSelect={setCategory} /></Suspense>
@@ -517,11 +521,11 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
             Each category keeps its own reduction when you switch categories. All reductions repeat monthly; other spending stays unchanged.
             Green negative amounts show hypothetical reductions, not achieved savings or a safe-to-spend amount.</p></details>
       </Card>
-      <Card title="Spending patterns" className="animate-in">
+      <Card title="Spending patterns" className="animate-in" onAsk={onAsk && (() => onAsk('What patterns stand out in my spending?'))}>
         <Suspense fallback={<p role="status">Loading spending insights…</p>}><SpendingInsights
           months={months} reductions={reductions} selected={category} peerSpendingCents={peer?.avgSpendingCents} peerIncomeCents={peer?.avgIncomeCents} /></Suspense>
       </Card>
-      <Card title="Three months ahead" className="animate-in">
+      <Card title="Three months ahead" className="animate-in" onAsk={onAsk && (() => onAsk('What does my 3-month balance forecast look like and how reliable is it?'))}>
         {model ? <><Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={sandboxMonthly} cutoff={month.month}
             start={start} prediction monthlySaving={combined.saving} /></Suspense>
           <div className="comparison" role="status" aria-live="polite">
@@ -549,7 +553,7 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
       </details>
     </>}
     {tab === 'payments' && <>
-      <div className="widget-grid"><Card title="Try a payment" className="animate-in hero-card">
+      <div className="widget-grid"><Card title="Try a payment" className="animate-in hero-card" onAsk={onAsk && (() => onAsk('How would a payment affect my available cash right now?'))}>
         <p className="note">See how a payment would affect your cash. This is a simulation; no money is sent.</p>
         <p className="note">Uses the observed balance at {monthLabel(month.month)}, the ending month chosen on Accounts or Spending.</p>
         <form onSubmit={addPayment} className="payment-form">
@@ -560,7 +564,7 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
           {paymentError && <p id="payment-error" className="error" role="alert">{paymentError}</p>}
           <Button type="submit" className="primary-button"><Icon name="payments" size={18} />Simulate payment</Button>
         </form>
-      </Card><Card title="Payment impact" className="animate-in">
+      </Card><Card title="Payment impact" className="animate-in" onAsk={onAsk && (() => onAsk('What is the impact of my simulated payments on my balance?'))}>
         <div key={paymentTotal} className="balance-flash" style={{ borderRadius: 8 }}><Money label="Total test payments" amount={paymentTotal} /></div>
         {!payments.length ? <p className="empty">Enter a payment to build your test list and see what would be left afterward.</p>
           : <ul className="sandbox-payments">{payments.map(payment => <li key={payment.id}>
@@ -589,7 +593,7 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
     </>}
     {tab === 'investments' && <>
       <Suspense fallback={null}><StockTickerLazy /></Suspense>
-      <div className="widget-grid"><Card title="Investment transfers" className="animate-in hero-card">
+      <div className="widget-grid"><Card title="Investment transfers" className="animate-in hero-card" onAsk={onAsk && (() => onAsk('Walk me through my investment transfer activity and what the numbers mean.'))}>
         <div className="chart-view-controls" role="group" aria-label="Investment visualization">
           <Button variant="outline" aria-pressed={investmentView === 'calendar'} onPress={() => setInvestmentView('calendar')}>Heatmap</Button>
           <Button variant="outline" aria-pressed={investmentView === 'chart'} onPress={() => setInvestmentView('chart')}>Monthly bars</Button>
@@ -601,7 +605,7 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
         <details><summary>Transfers are not investment performance</summary>
           <p className="note">These are transfers, not earnings or everyday spending. No holdings, portfolio value or investment performance are provided.
             Salary sweeps in the selected months: {euro(rangeTotals.sweeps)}. Their destination is unknown; they are not confirmed investment deposits.</p></details>
-      </Card><Card title="Try setting money aside" className="animate-in">
+      </Card><Card title="Try setting money aside" className="animate-in" onAsk={onAsk && (() => onAsk('How much am I regularly setting aside, and what could I reasonably afford to contribute?'))}>
         <div className="slider-label"><label htmlFor="contribution">One-time contribution</label><strong>{euro(contribution)}</strong></div>
         <input id="contribution" type="range" min="0" max={Math.min(100000, Math.max(0, month.closingBalanceCents - paymentTotal))}
           step="1" value={contribution} aria-valuetext={`${euro(contribution)} one-time contribution`}
@@ -619,16 +623,16 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
   </>;
 }
 
-function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onExpand, loading, loadingPhase, benchmarks }: {
+function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onExpand, onClear, onAsk, loading, loadingPhase, benchmarks }: {
   person: Person; tab: Tab; period: Period; onPeriodChange: (period: Period) => void;
-  messages: ChatMessage[]; onSend: (question: string) => void; onExpand: () => void; loading: boolean; loadingPhase?: 'searching' | 'thinking' | null; benchmarks: Benchmarks | null;
+  messages: ChatMessage[]; onSend: (question: string) => void; onExpand: () => void; onClear: () => void; onAsk: (question: string) => void; loading: boolean; loadingPhase?: 'searching' | 'thinking' | null; benchmarks: Benchmarks | null;
 }) {
   const months = useMemo(() => person.monthly.slice(period.start, period.end + 1), [person, period.start, period.end]);
   return <>
     <h1 className="sr-only">{tabs.find(item => item.id === tab)!.label}</h1>
     <div className="dashboard-layout">
       <div className="dashboard-main">
-        <Workbench key={`${period.start}-${period.end}`} person={person} months={months} tab={tab} benchmarks={benchmarks} onChooseMonth={month => {
+        <Workbench key={`${period.start}-${period.end}`} person={person} months={months} tab={tab} benchmarks={benchmarks} onAsk={onAsk} onChooseMonth={month => {
           const index = person.monthly.findIndex(item => item.month === month);
           if (index < 0) throw new Error('Unknown investment calendar month.');
           onPeriodChange({ start: index, end: index });
@@ -640,7 +644,7 @@ function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onEx
           {person.limitations.join(' ')} {person.hasSkippedRows && 'Warning: this person has skipped source rows.'}</p></details></footer>
       </div>
       <div className="dashboard-coach">
-        <CoachCard key={`${tab}-${period.start}-${period.end}`} messages={messages} onSend={onSend} onExpand={onExpand} loading={loading} loadingPhase={loadingPhase} />
+        <CoachCard key={`${tab}-${period.start}-${period.end}`} messages={messages} onSend={onSend} onExpand={onExpand} onClear={onClear} loading={loading} loadingPhase={loadingPhase} />
       </div>
     </div>
   </>;
@@ -850,6 +854,8 @@ export default function App() {
       ? isFinancePage ? <Dashboard key={userId} person={person} tab={tab} period={period} onPeriodChange={setSelection}
         messages={chats[chatKey]?.messages ?? []} onSend={question => sendQuestion(question, chatKey, createThread())}
         loading={loadingChat === chatKey} loadingPhase={loadingChat === chatKey ? loadingPhase : null} benchmarks={benchmarks}
+        onClear={() => setChats(items => { const next = { ...items }; delete next[chatKey]; return next; })}
+        onAsk={question => sendQuestion(question, chatKey, createThread())}
         onExpand={() => {
           const thread = chats[chatKey] ?? createThread();
           setChats(items => ({ ...items, [chatKey]: items[chatKey] ?? thread }));
