@@ -163,6 +163,11 @@ main { padding: 24px; }
   from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+@keyframes balanceFlash {
+  0%   { background: color-mix(in oklch, var(--accent) 18%, transparent); border-radius: 8px; }
+  100% { background: transparent; }
+}
+.balance-flash { animation: balanceFlash 0.6s ease-out both; }
 .animate-in { animation: fadeUp var(--dur-short) var(--ease-out) both; }
 .animate-in:nth-child(2) { animation-delay: 60ms; }
 .animate-in:nth-child(3) { animation-delay: 120ms; }
@@ -291,6 +296,14 @@ input[type="range"] { width: 100%; min-width: 0; min-height: 44px; accent-color:
 .basket-totals div { padding: 14px; background: var(--sidebar-bg); border-radius: 8px; }
 .basket-totals dt { color: var(--muted); font-size: 12px; }
 .basket-totals dd { font-weight: 700; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+.basket-chart { height: 220px; display: flex; align-items: center; gap: 0; margin: 16px 0; }
+.basket-chart > .recharts-responsive-container { flex: 0 0 180px; height: 180px !important; }
+.basket-legend { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+.basket-legend-item { display: grid; grid-template-columns: 10px 1fr auto auto; align-items: center; gap: 8px; font-size: 13px; }
+.basket-swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.basket-legend-label { color: var(--text); }
+.basket-legend-pct { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.basket-legend-eur { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 .basket-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
 .prompt-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
 .question-form { display: flex; gap: 10px; align-items: center; }
@@ -412,6 +425,8 @@ th { font-weight: 650; color: var(--ink); }
   .money small { font-size: 11px; }
   .card { padding: 20px 16px; }
   .stat-row, .comparison, .basket-fields { grid-template-columns: minmax(0,1fr); gap: 16px; }
+  .basket-chart { flex-direction: column; height: auto; }
+  .basket-chart > .recharts-responsive-container { flex: 0 0 160px; width: 100% !important; }
   .transaction-controls { grid-template-columns: minmax(0,1fr); }
   .transaction-list li { gap: 8px; flex-wrap: wrap; }
   .transaction-description { flex-basis: calc(100% - 44px); }

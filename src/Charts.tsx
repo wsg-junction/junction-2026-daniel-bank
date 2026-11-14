@@ -5,7 +5,8 @@ import {
 import { useState } from 'react';
 import { Button } from '@heroui/react';
 import type { Month } from './data';
-import { averageSpending, euro, forecast, monthLabel, palette, spendingScenario } from './finance';
+import { averageSpending, basketColors, basketLabels, euro, forecast, monthLabel, palette, spendingScenario } from './finance';
+import type { Basket } from './finance';
 
 const tick = { fill: '#53616f', fontSize: 11, fontFamily: 'inherit' };
 const grid = { stroke: '#edf0eb', strokeOpacity: 0.12, strokeDasharray: '3 5', vertical: false };
@@ -252,6 +253,36 @@ export function CashFlowChart({ months, cutoff, peerIncomeCents, peerSpendingCen
           <td>{euro(month.consumptionCents)}</td><td>{euro(month.netCashFlowCents)}</td></tr>)}</tbody></table></div>
     </details>
   </>;
+}
+
+export function BasketChart({ totals }: { totals: Record<Basket, number> }) {
+  const data = (Object.keys(basketLabels) as Basket[])
+    .filter(b => totals[b] > 0)
+    .map(b => ({ name: basketLabels[b], value: totals[b], basket: b }));
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (!total) return null;
+  return (
+    <div className="chart basket-chart" role="img" aria-label="Spending basket donut chart. Exact values in the legend below.">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        <PieChart>
+          <Pie data={data} dataKey="value" innerRadius="55%" outerRadius="80%" paddingAngle={2} startAngle={90} endAngle={-270}>
+            {data.map(entry => <Cell key={entry.basket} fill={basketColors[entry.basket]} />)}
+          </Pie>
+          <Tooltip formatter={formatTooltip} contentStyle={tooltipStyle} itemStyle={{ color: '#3a4a40' }} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="basket-legend">
+        {data.map(d => (
+          <div key={d.basket} className="basket-legend-item">
+            <span className="basket-swatch" style={{ background: basketColors[d.basket] }} />
+            <span className="basket-legend-label">{d.name}</span>
+            <span className="basket-legend-pct">{Math.round(d.value / total * 100)}%</span>
+            <span className="basket-legend-eur">{euro(d.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function CategoryTrend({ months, cutoff, category }: { months: Month[]; cutoff: string; category: string }) {

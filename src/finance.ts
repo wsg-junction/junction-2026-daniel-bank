@@ -32,9 +32,19 @@ export const basketColors: Record<Basket, string> = {
 
 export function classify(category: string, overrides: Overrides): Basket {
   if (overrides[category]) return overrides[category];
-  if (['Housing', 'Utilities'].includes(category)) return 'regular';
+  if (['Housing', 'Utilities', 'Groceries', 'Transportation'].includes(category)) return 'regular';
   if (['Restaurants', 'Entertainment', 'Lifestyle', 'Travel'].includes(category)) return 'everyday';
+  if (['Health', 'Home & Tech'].includes(category)) return 'irregular';
   return 'unclassified';
+}
+
+// Returns categories that appear in fewer than half the observed months — likely one-off costs.
+export function irregularCategories(months: Month[]): Set<string> {
+  if (!months.length) return new Set();
+  const counts: Record<string, number> = {};
+  for (const m of months) for (const cat of Object.keys(m.categorySpendingCents)) counts[cat] = (counts[cat] ?? 0) + 1;
+  const threshold = months.length / 2;
+  return new Set(Object.entries(counts).filter(([, n]) => n < threshold).map(([cat]) => cat));
 }
 
 export function baskets(month: Month, overrides: Overrides) {
@@ -173,44 +183,43 @@ export function peerBenchmark(person: Person, benchmarks: Benchmarks): AgeGroupB
 }
 
 export interface Answer { text: string; evidence: string; caveat: string }
+export interface PriorMessage { question: string; answer: Answer }
 
-/**
- * Extended version: supports both rule-based (local) and live AI responses.
- * Enable by passing enableLiveAI = true and providing the AI functions.
- */
 export async function answerQuestionExtended(
   person: Person,
   month: Month,
   question: string,
   options?: {
     enableLiveAI?: boolean;
+    liveOnly?: boolean;
     currentTab?: string;
     webContext?: string;
     benchmarks?: Benchmarks;
+    history?: PriorMessage[];
     onAgentError?: (error: Error) => void;
   }
 ): Promise<Answer> {
-  // If live AI is enabled and we have the context builder, try it first
   if (options?.enableLiveAI && options?.currentTab) {
     try {
-      // Dynamically import to avoid circular dependencies
       const { buildAgentContext, callAgent } = await import('./agent.ts');
-      const context = buildAgentContext(person, month, options.currentTab, options.webContext, options.benchmarks);
-      const messages = [
-        context,
-        { role: 'user' as const, content: question },
-      ];
-      const response = await callAgent(messages);
-      return response;
+      const context = buildAgentContext(person, month, options.currentTab, options.benchmarks);
+      const prior = (options.history ?? []).flatMap(m => ([
+        { role: 'user' as const, content: m.question },
+        { role: 'assistant' as const, content: m.answer.text },
+      ]));
+      const today = new Date().toISOString().slice(0, 10);
+      const webExchange: { role: 'user' | 'assistant'; content: string }[] = options.webContext ? [
+        { role: 'user', content: 'Search the web for current financial context relevant to my next question.' },
+        { role: 'assistant', content: `I searched the web today (${today}) and found the following current information:\n${options.webContext}\nUse these results to answer the next question directly.` },
+      ] : [];
+      const messages = [context, ...prior, ...webExchange, { role: 'user' as const, content: question }];
+      return await callAgent(messages, undefined, options.liveOnly ?? false);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       options.onAgentError?.(err);
       console.warn('[Agent] Live AI failed, falling back to rule-based answers:', err.message);
-      // Fall through to rule-based response
     }
   }
-
-  // Fall back to rule-based response (existing logic)
   return answerQuestion(person, month, question);
 }
 
@@ -230,8 +239,13 @@ export function answerQuestion(person: Person, month: Month, question: string): 
       || /\b(last year|this week|last week|next week|last month|this month|today|yesterday)\b/.test(q)) {
     return result('I answer for the month selected at the top of the app. Select the period you want, then ask again without a relative date. I do not have live or weekly transaction detail in this demo.');
   }
-  if (/safe|afford/.test(q)) return result(
-    'I cannot responsibly say what is safe to spend from this account alone. We would need your upcoming bills, expected payment dates, other accounts, and chosen emergency buffer. The Spending view shows a cash-flow scenario, not a safe-to-spend allowance.');
+  if (/safe|afford/.test(q)) {
+    const recent = person.monthly.slice(-3);
+    const avgConsumption = Math.round(recent.reduce((s, m) => s + m.consumptionCents, 0) / recent.length);
+    const buffer = Math.round(avgConsumption * 0.5); // half a month as emergency buffer
+    const safeToSpend = Math.max(0, month.closingBalanceCents - buffer);
+    return result(`Rough safe-to-spend estimate: ${euro(safeToSpend)} — that's your current balance (${euro(month.closingBalanceCents)}) minus a half-month spending buffer (${euro(buffer)}) based on your 3-month average of ${euro(avgConsumption)}/mo. This ignores upcoming bills, other accounts, and your own emergency fund goal. Use it as a ballpark, not a promise.`);
+  }
   if (/forecast|predict|next three|next month/.test(q)) {
     if (person.monthly.filter(item => item.month <= month.month).length < 4) {
       return result('There is not enough preceding history for this forecast. Choose a month with at least four observed months, so a three-month baseline can be backtested.');
@@ -257,7 +271,8 @@ export function answerQuestion(person: Person, month: Month, question: string): 
     return result(`Consumption changed by ${euro(month.consumptionCents - previous.consumptionCents)} versus ${monthLabel(previous.month)}. Largest category changes: ${changes.map(item => `${item.category} ${item.delta >= 0 ? '+' : ''}${euro(item.delta)}`).join('; ')}. These describe the change, not its cause.`);
   }
   const category = Object.keys(month.categorySpendingCents).find(name => q.includes(name.toLowerCase()))
-    ?? (/dining|restaurant/.test(q) ? 'Restaurants' : undefined);
+    ?? (/dining|restaurant/.test(q) ? 'Restaurants' : undefined)
+    ?? (/coffee|café|cafe|latte/.test(q) ? 'Restaurants' : undefined);
   if (/save|reduc|cut|what if/.test(q)) {
     const percentMatch = q.match(/(-?\d+(?:\.\d+)?)\s*%/);
     const reduction = percentMatch ? Number(percentMatch[1]) : 20;
@@ -271,8 +286,10 @@ export function answerQuestion(person: Person, month: Month, question: string): 
       ? 'No taxi spending with MCC 4121 is identified in this month. Transactions without MCC codes could include taxis, so absence is not proof of zero spending.'
       : `${euro(taxi)} of taxi spending is identified by MCC 4121. Transactions with missing MCC codes may not be included.`);
   }
-  if (category) return result(
-    `${category}: ${euro(month.categorySpendingCents[category] ?? 0)} across ${month.categoryCounts[category] ?? 0} observed payments. It accounts for ${month.consumptionCents ? Math.round((month.categorySpendingCents[category] ?? 0) / month.consumptionCents * 100) : 0}% of consumption. Merchant names are not available.`);
+  if (category) {
+    const coffeeSuffix = category === 'Restaurants' ? ' Cafés and coffees are not separately identified — they likely appear here.' : '';
+    return result(`${category}: ${euro(month.categorySpendingCents[category] ?? 0)} across ${month.categoryCounts[category] ?? 0} observed payments. It accounts for ${month.consumptionCents ? Math.round((month.categorySpendingCents[category] ?? 0) / month.consumptionCents * 100) : 0}% of consumption. Merchant names are not available.${coffeeSuffix}`);
+  }
   if (/income|salary|earn/.test(q)) return result(
     `Income from salary and other income is ${euro(month.incomeCents)}. After ${euro(month.consumptionCents)} of consumption, the surplus before transfers is ${euro(month.surplusBeforeTransfersCents)}. Investment withdrawals are excluded from income.`);
   if (/balance|cash flow/.test(q)) return result(

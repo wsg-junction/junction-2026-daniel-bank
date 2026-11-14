@@ -33,10 +33,10 @@ function Markdown({ text }: { text: string }) {
   return <>{nodes}</>;
 }
 import {
-  answerQuestion, answerQuestionExtended, averageSpending, basketLabels, baskets, classify, euro, forecast, monthLabel,
+  answerQuestion, answerQuestionExtended, averageSpending, basketLabels, baskets, classify, euro, forecast, irregularCategories, monthLabel,
   parseAmount, peerBenchmark, sandboxBalance, scenario, spendingScenario,
 } from './finance';
-import type { Answer, Basket, Overrides } from './finance';
+import type { Answer, Basket, Overrides, PriorMessage } from './finance';
 import { Icon } from './Icons';
 
 const BalanceChart = lazy(() => import('./Charts').then(module => ({ default: module.BalanceChart })));
@@ -44,6 +44,7 @@ const SpendingChart = lazy(() => import('./Charts').then(module => ({ default: m
 const InvestmentChart = lazy(() => import('./Charts').then(module => ({ default: module.InvestmentChart })));
 const SpendingInsights = lazy(() => import('./Charts').then(module => ({ default: module.SpendingInsights })));
 const CashFlowChart = lazy(() => import('./Charts').then(module => ({ default: module.CashFlowChart })));
+const BasketChart = lazy(() => import('./Charts').then(module => ({ default: module.BasketChart })));
 const StockTickerLazy = lazy(() => import('./StockTicker').then(module => ({ default: module.StockTicker })));
 const tabs = [
   { id: 'accounts', label: 'Accounts', icon: 'accounts' },
@@ -182,15 +183,15 @@ function InvestmentHeatmap({ person, start, end, onSelect }: {
   </>;
 }
 
-function CoachCard({ messages, onSend, onExpand, full = false, loading = false }: {
-  messages: ChatMessage[]; onSend: (question: string) => void; onExpand?: () => void; full?: boolean; loading?: boolean;
+function CoachCard({ messages, onSend, onExpand, full = false, loading = false, loadingPhase }: {
+  messages: ChatMessage[]; onSend: (question: string) => void; onExpand?: () => void; full?: boolean; loading?: boolean; loadingPhase?: 'searching' | 'thinking' | null;
 }) {
   const [input, setInput] = useState('');
   const [collapsed, setCollapsed] = useState(false);
   const history = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (history.current) history.current.scrollTop = history.current.scrollHeight;
-  }, [messages.length]);
+  }, [messages.length, loading]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!input.trim()) return;
@@ -215,7 +216,7 @@ function CoachCard({ messages, onSend, onExpand, full = false, loading = false }
         <div className="coach-answer"><p><Markdown text={message.answer.text} /></p>
           <details><summary>Source & limits</summary><p>{message.answer.evidence}</p><p>{message.answer.caveat}</p></details></div>
       </div>)}
-      {loading && <div className="coach-exchange"><p className="coach-answer note" role="status">Thinking…</p></div>}
+      {loading && <div className="coach-exchange"><p className="coach-answer note" role="status">{loadingPhase === 'searching' ? 'Searching web…' : 'Thinking…'}</p></div>}
     </div>
     <div className="coach-footer">
       <span />
@@ -223,9 +224,9 @@ function CoachCard({ messages, onSend, onExpand, full = false, loading = false }
   </section>;
 }
 
-function CoachPage({ thread, threads, onSend, onChoose, onHistory, onBack, historyView, loading }: {
+function CoachPage({ thread, threads, onSend, onChoose, onHistory, onBack, historyView, loading, loadingPhase }: {
   thread: ChatThread | null; threads: ChatThread[]; onSend: (question: string) => void;
-  onChoose: (id: string) => void; onHistory: () => void; onBack: () => void; historyView: boolean; loading: boolean;
+  onChoose: (id: string) => void; onHistory: () => void; onBack: () => void; historyView: boolean; loading: boolean; loadingPhase?: 'searching' | 'thinking' | null;
 }) {
   return <section className="coach-page">
     <div className="coach-page-heading">
@@ -240,7 +241,7 @@ function CoachPage({ thread, threads, onSend, onChoose, onHistory, onBack, histo
       </li>)}</ul> : <p className="empty">No conversations yet. Ask a question from a finance page to start one.</p>}
     </> : thread ? <>
       <p className="note">{thread.title} · {thread.period}. Answers use {monthLabel(thread.endingMonth)}.</p>
-      <CoachCard key={thread.id} full messages={thread.messages} onSend={onSend} loading={loading} />
+      <CoachCard key={thread.id} full messages={thread.messages} onSend={onSend} loading={loading} loadingPhase={loadingPhase} />
     </> : <p className="empty">Choose a conversation from All chats or start one from a finance page.</p>}
   </section>;
 }
@@ -398,7 +399,12 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
   const peerLabel = peer ? `peers ${peer.label}` : undefined;
   const [category, setCategory] = useState('Restaurants');
   const [reductions, setReductions] = useState<Record<string, number>>({});
-  const [overrides, setOverrides] = useState<Overrides>({});
+  const [overrides, setOverrides] = useState<Overrides>(() => {
+    const irregular = irregularCategories(person.monthly);
+    const auto: Overrides = {};
+    for (const cat of irregular) if (classify(cat, {}) === 'unclassified') auto[cat] = 'irregular';
+    return auto;
+  });
   const [payments, setPayments] = useState<Payment[]>([]);
   const [recipient, setRecipient] = useState('');
   const [paymentInput, setPaymentInput] = useState('');
@@ -409,14 +415,30 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
   const paymentTotal = payments.reduce((sum, payment) => sum + payment.amount, 0);
   const outflow = paymentTotal + contribution;
   const balance = sandboxBalance(month.closingBalanceCents, paymentTotal, contribution);
+  // Patch the ending month's balance into person.monthly so every chart picks up the outflow automatically.
+  const sandboxMonthly = outflow > 0
+    ? person.monthly.map(m => m.month === month.month
+        ? {
+            ...m,
+            closingBalanceCents: balance,
+            netCashFlowCents: m.netCashFlowCents - outflow,
+            consumptionCents: m.consumptionCents + outflow,
+            surplusBeforeTransfersCents: m.surplusBeforeTransfersCents - outflow,
+            categorySpendingCents: {
+              ...m.categorySpendingCents,
+              'Payments (simulated)': outflow,
+            },
+          }
+        : m)
+    : person.monthly;
   const reduction = reductions[category] ?? 0;
   const simulation = scenario(spendingBaseline, category, reduction);
   const combined = spendingScenario(spendingBaseline, reductions);
   const revisedMonth = combined.month;
   const reducedCount = Object.values(combined.savings).filter(amount => amount > 0).length;
-  const model = person.monthly.filter(item => item.month <= month.month).length >= 4
-    ? forecast(person.monthly, month.month, combined.saving, outflow) : null;
-  const baseline = model ? forecast(person.monthly, month.month) : null;
+  const model = sandboxMonthly.filter(item => item.month <= month.month).length >= 4
+    ? forecast(sandboxMonthly, month.month, combined.saving) : null;
+  const baseline = model && outflow > 0 ? forecast(person.monthly, month.month) : null;
   const categories = [...new Set(person.monthly.filter(item => item.month <= month.month)
     .flatMap(item => Object.keys(item.categorySpendingCents)))].sort();
   const basketTotals = baskets(revisedMonth, overrides);
@@ -437,11 +459,15 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
     <p className="sr-only" role="status" aria-live="polite">{notice}</p>
     {tab === 'accounts' && <>
       <Card title="Account balance" className="animate-in hero-card">
-        <div className="account-balance"><Money label="Observed account balance" amount={month.closingBalanceCents}
-          detail={`Recorded ${month.balanceObservedAt.slice(0, 10)} · not a live balance`} /></div>
-        <Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={person.monthly} start={start} cutoff={month.month} /></Suspense>
+        <div className="account-balance"><Money
+          label={outflow > 0 ? 'Balance after your experiments' : 'Observed account balance'}
+          amount={outflow > 0 ? balance : month.closingBalanceCents}
+          detail={outflow > 0
+            ? `${euro(month.closingBalanceCents)} observed − ${euro(outflow)} in experiments · not a live balance`
+            : `Recorded ${month.balanceObservedAt.slice(0, 10)} · not a live balance`} /></div>
+        <Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={sandboxMonthly} start={start} cutoff={month.month} /></Suspense>
         <details><summary>Cash flow & mortgage context</summary>
-          <Suspense fallback={<p role="status">Loading chart…</p>}><CashFlowChart months={person.monthly} cutoff={month.month} peerIncomeCents={peer?.avgIncomeCents} peerSpendingCents={peer?.avgSpendingCents} /></Suspense>
+          <Suspense fallback={<p role="status">Loading chart…</p>}><CashFlowChart months={sandboxMonthly} cutoff={month.month} peerIncomeCents={peer?.avgIncomeCents} peerSpendingCents={peer?.avgSpendingCents} /></Suspense>
           <div className="stat-row">
             <Money label="Income in selected months" amount={rangeTotals.income} peerAmount={peer ? peer.avgIncomeCents * months.length : undefined} peerLabel={peerLabel} />
             <Money label="Spending in selected months" amount={rangeTotals.consumption} peerAmount={peer ? peer.avgSpendingCents * months.length : undefined} peerLabel={peerLabel} />
@@ -496,23 +522,23 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
           months={months} reductions={reductions} selected={category} peerSpendingCents={peer?.avgSpendingCents} peerIncomeCents={peer?.avgIncomeCents} /></Suspense>
       </Card>
       <Card title="Three months ahead" className="animate-in">
-        {model && baseline ? <><Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={person.monthly} cutoff={month.month}
-            start={start} prediction monthlySaving={combined.saving} oneTimeOutflow={outflow} /></Suspense>
+        {model ? <><Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={sandboxMonthly} cutoff={month.month}
+            start={start} prediction monthlySaving={combined.saving} /></Suspense>
           <div className="comparison" role="status" aria-live="polite">
-            <Money label="Next month, baseline" amount={baseline.points[0].central} />
-            <Money label="Next month, your scenario" amount={model.points[0].central} detail={`Monthly change +${euro(combined.saving)}; one-time outflows ${euro(outflow)}`} /></div>
+            {baseline && <Money label="Next month, no payments" amount={baseline.points[0].central} />}
+            <Money label={baseline ? 'Next month, with payments' : 'Next month'} amount={model.points[0].central} detail={outflow > 0 ? `${euro(outflow)} already in starting balance` : undefined} /></div>
           <details><summary>Assumptions & uncertainty</summary><p className="note">Average net cash flow from the last three observed months through the selected month: {euro(model.net)} per month, including transfers.
-            Your combined reductions add {euro(combined.saving)} each future month; sandbox payments and the investment contribution subtract {euro(outflow)} once at the start.
-            Historical one-month mean absolute error: {euro(model.mae)} over {model.backtestCount} checks. No data after the selected month is used.
+            {combined.saving > 0 && ` Your combined reductions add ${euro(combined.saving)} each future month.`}
+            {outflow > 0 && ` Sandbox payments and investment contribution (${euro(outflow)}) are already reflected in the starting balance.`}
+            {` Historical one-month mean absolute error: ${euro(model.mae)} over ${model.backtestCount} checks. No data after the selected month is used.
             The range uses the larger of that error and the largest training-window deviation, widening linearly. It is a sensitivity band, not a confidence interval.
-            No bill dates, missing obligations, returns or fees are predicted. Negative forecasts are retained.</p></details></>
+            No bill dates, missing obligations, returns or fees are predicted. Negative forecasts are retained.`}</p></details></>
           : <p className="empty">Select a later month. At least four observed months are needed for a forecast and historical check.</p>}
       </Card>
       {benchmarks && <BenchmarkCard person={person} benchmarks={benchmarks} months={months} />}
       <details className="basket-details"><summary>Sort spending into three baskets</summary>
         <p className="note">Tentative suggestions, not proven necessities. You decide what fits; ambiguous categories stay unclassified.</p>
-        <dl className="basket-totals">{(Object.keys(basketLabels) as Basket[]).map(basket =>
-          <div key={basket}><dt>{basketLabels[basket]}</dt><dd>{euro(basketTotals[basket])}</dd></div>)}</dl>
+        <Suspense fallback={null}><BasketChart totals={basketTotals} /></Suspense>
         <div className="basket-fields">{Object.keys(spendingBaseline.categorySpendingCents).sort().map(name =>
           <label key={name}>{name}<select value={classify(name, overrides)} aria-label={`${name} spending basket`} onChange={event => {
             const value = event.target.value;
@@ -535,21 +561,29 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
           <Button type="submit" className="primary-button"><Icon name="payments" size={18} />Simulate payment</Button>
         </form>
       </Card><Card title="Payment impact" className="animate-in">
-        <Money label="Total test payments" amount={paymentTotal} />
+        <div key={paymentTotal} className="balance-flash" style={{ borderRadius: 8 }}><Money label="Total test payments" amount={paymentTotal} /></div>
         {!payments.length ? <p className="empty">Enter a payment to build your test list and see what would be left afterward.</p>
           : <ul className="sandbox-payments">{payments.map(payment => <li key={payment.id}>
             <div><strong>{payment.recipient}</strong><span>Simulation only · {euro(payment.amount)}</span></div>
             <Button variant="ghost" isIconOnly aria-label={`Remove simulated payment to ${payment.recipient}`} onPress={() => {
               setPayments(items => items.filter(item => item.id !== payment.id)); setNotice('Simulated payment removed.');
             }}><Icon name="close" size={18} /></Button></li>)}</ul>}
-        {payments.length > 0 && <><div className="payment-impact" role="status" aria-live="polite">
+        {payments.length > 0 && <><div key={balance} className="payment-impact balance-flash" role="status" aria-live="polite">
           <Money label="Cash left after your experiments" amount={balance} detail={contribution > 0
             ? `Also includes your ${euro(contribution)} investment contribution` : 'After the test payments above'} /></div>
           <Button variant="outline" onPress={() => {
             setPayments([]); setPaymentError(null); setNotice('All test payments cleared.');
           }}><Icon name="reset" size={16} />Clear test payments</Button></>}
-        <p className="note">Test payments also affect the Spending forecast. Switching person or month, or refreshing, clears them. No payment network is connected.</p>
+        <p className="note">Switching person or month, or refreshing, clears them. No payment network is connected.</p>
       </Card></div>
+      {payments.length > 0 && model && <Card title="Balance forecast with your payments" className="animate-in">
+        <Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={sandboxMonthly} cutoff={month.month}
+          start={start} prediction monthlySaving={combined.saving} /></Suspense>
+        <div className="comparison" role="status" aria-live="polite">
+          {baseline && <Money label="Next month, no payments" amount={baseline.points[0].central} />}
+          <Money label="Next month, with payments" amount={model.points[0].central} detail={`${euro(outflow)} deducted from starting balance`} /></div>
+        <p className="note">Forecast uses last 3 months' average cash flow. Payments reduce the starting balance once; spending patterns are unchanged.</p>
+      </Card>}
       <details className="history-details"><summary>Recorded outgoing payments · {monthLabel(start, true)}–{monthLabel(month.month, true)}</summary>
         <Transactions person={person} months={months} mode="payments" /></details>
     </>}
@@ -561,7 +595,7 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
           <Button variant="outline" aria-pressed={investmentView === 'chart'} onPress={() => setInvestmentView('chart')}>Monthly bars</Button>
         </div>
         {investmentView === 'calendar' ? <InvestmentHeatmap person={person} start={start} end={month.month} onSelect={onChooseMonth} />
-          : <Suspense fallback={<p role="status">Loading chart…</p>}><InvestmentChart months={person.monthly} start={start} cutoff={month.month} /></Suspense>}
+          : <Suspense fallback={<p role="status">Loading chart…</p>}><InvestmentChart months={sandboxMonthly} start={start} cutoff={month.month} /></Suspense>}
         <div className="comparison"><Money label="Deposits in selected months" amount={rangeTotals.deposits} />
           <Money label="Withdrawals in selected months" amount={rangeTotals.withdrawals} /></div>
         <details><summary>Transfers are not investment performance</summary>
@@ -585,9 +619,9 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks }: { person:
   </>;
 }
 
-function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onExpand, loading, benchmarks }: {
+function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onExpand, loading, loadingPhase, benchmarks }: {
   person: Person; tab: Tab; period: Period; onPeriodChange: (period: Period) => void;
-  messages: ChatMessage[]; onSend: (question: string) => void; onExpand: () => void; loading: boolean; benchmarks: Benchmarks | null;
+  messages: ChatMessage[]; onSend: (question: string) => void; onExpand: () => void; loading: boolean; loadingPhase?: 'searching' | 'thinking' | null; benchmarks: Benchmarks | null;
 }) {
   const months = useMemo(() => person.monthly.slice(period.start, period.end + 1), [person, period.start, period.end]);
   return <>
@@ -606,7 +640,7 @@ function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onEx
           {person.limitations.join(' ')} {person.hasSkippedRows && 'Warning: this person has skipped source rows.'}</p></details></footer>
       </div>
       <div className="dashboard-coach">
-        <CoachCard key={`${tab}-${period.start}-${period.end}`} messages={messages} onSend={onSend} onExpand={onExpand} loading={loading} />
+        <CoachCard key={`${tab}-${period.start}-${period.end}`} messages={messages} onSend={onSend} onExpand={onExpand} loading={loading} loadingPhase={loadingPhase} />
       </div>
     </div>
   </>;
@@ -627,8 +661,9 @@ export default function App() {
   const [chats, setChats] = useState<Record<string, ChatThread>>({});
   const [activeChat, setActiveChat] = useState<string | null>(null);
   const [returnPage, setReturnPage] = useState<Tab>('accounts');
-  const [aiMode, setAiMode] = useState<'auto' | 'local'>('auto');
+  const [aiMode, setAiMode] = useState<'live' | 'web' | 'local'>('live');
   const [loadingChat, setLoadingChat] = useState<string | null>(null);
+  const [loadingPhase, setLoadingPhase] = useState<'searching' | 'thinking' | null>(null);
   const [darkMode, setDarkMode] = useState(() => document.documentElement.getAttribute('data-mode') === 'dark');
   const [benchmarks, setBenchmarks] = useState<Benchmarks | null>(null);
   const sessionVisited = useRef<Set<string>>(new Set());
@@ -651,20 +686,24 @@ export default function App() {
     if (!month) throw new Error('Conversation period is unavailable.');
     const currentTab = thread.id.split(':')[3] ?? 'accounts';
     setLoadingChat(id);
-    const webContextPromise = aiMode === 'auto'
-      ? import('./agent').then(m => m.searchWebContext(question, currentTab)).catch(() => '')
+    const history: PriorMessage[] = (chats[id]?.messages ?? thread.messages).slice(-6);
+    const webContextPromise = aiMode === 'web'
+      ? (setLoadingPhase('searching'), import('./agent').then(m => m.searchWebContext(question, currentTab)).catch(() => ''))
       : Promise.resolve('');
-    webContextPromise.then(webContext =>
-      answerQuestionExtended(person, month, question, {
-        enableLiveAI: aiMode === 'auto',
+    webContextPromise.then(webContext => {
+      setLoadingPhase('thinking');
+      return answerQuestionExtended(person, month, question, {
+        enableLiveAI: aiMode !== 'local',
+        liveOnly: aiMode === 'live',
         currentTab,
         webContext,
         benchmarks: benchmarks ?? undefined,
-      })
-    ).then(answer => {
+        history,
+      });
+    }).then(answer => {
       const message = { question, answer };
       setChats(items => ({ ...items, [id]: { ...thread, messages: [...(items[id]?.messages ?? thread.messages), message] } }));
-    }).finally(() => setLoadingChat(null));
+    }).finally(() => { setLoadingChat(null); setLoadingPhase(null); });
   };
   const main = useRef<HTMLElement>(null);
   const appHeader = useRef<HTMLElement>(null);
@@ -776,16 +815,20 @@ export default function App() {
           <Icon name={darkMode ? 'sun' : 'moon'} size={16} />
         </button>
         <Dropdown>
-          <Dropdown.Trigger className="ai-mode-trigger" aria-label={`AI mode: ${aiMode === 'auto' ? 'Live AI' : 'Local only'}`}>
-            <span className={`ai-mode-badge ${aiMode}`}>{aiMode === 'auto' ? '✦ Live AI' : '⊙ Local'}</span>
+          <Dropdown.Trigger className="ai-mode-trigger" aria-label={`AI mode: ${aiMode === 'live' ? 'Live AI' : aiMode === 'web' ? 'AI + Web' : 'Local only'}`}>
+            <span className={`ai-mode-badge ${aiMode}`}>{aiMode === 'live' ? '✦ Live AI' : aiMode === 'web' ? '✦ AI + Web' : '⊙ Local'}</span>
             <Icon name="dropdown" size={14} />
           </Dropdown.Trigger>
           <Dropdown.Popover className="person-menu" placement="bottom end">
             <Dropdown.Menu aria-label="AI mode" selectionMode="single" selectedKeys={new Set([aiMode])}
-              onAction={key => { if (key === 'auto' || key === 'local') setAiMode(key); }}>
-              <Dropdown.Item key="auto" id="auto" textValue="Live AI (Nemotron → Gemma)">
-                <div className="person-menu-copy"><strong>Live AI</strong><span>Nemotron → Gemma fallback</span></div>
-                {aiMode === 'auto' && <Icon name="check" size={16} />}
+              onAction={key => { const k = String(key); if (k === 'live' || k === 'web' || k === 'local') setAiMode(k); }}>
+              <Dropdown.Item key="live" id="live" textValue="Live AI (Nemotron only)">
+                <div className="person-menu-copy"><strong>Live AI</strong><span>Nemotron only, no web search</span></div>
+                {aiMode === 'live' && <Icon name="check" size={16} />}
+              </Dropdown.Item>
+              <Dropdown.Item key="web" id="web" textValue="AI + Web (Nemotron + web search)">
+                <div className="person-menu-copy"><strong>AI + Web</strong><span>Nemotron + live web context</span></div>
+                {aiMode === 'web' && <Icon name="check" size={16} />}
               </Dropdown.Item>
               <Dropdown.Item key="local" id="local" textValue="Local rules only">
                 <div className="person-menu-copy"><strong>Local only</strong><span>Rule-based, no API calls</span></div>
@@ -806,14 +849,15 @@ export default function App() {
     <main id="main" ref={main} tabIndex={-1}>{person?.userId === userId
       ? isFinancePage ? <Dashboard key={userId} person={person} tab={tab} period={period} onPeriodChange={setSelection}
         messages={chats[chatKey]?.messages ?? []} onSend={question => sendQuestion(question, chatKey, createThread())}
-        loading={loadingChat === chatKey} benchmarks={benchmarks}
+        loading={loadingChat === chatKey} loadingPhase={loadingChat === chatKey ? loadingPhase : null} benchmarks={benchmarks}
         onExpand={() => {
           const thread = chats[chatKey] ?? createThread();
           setChats(items => ({ ...items, [chatKey]: items[chatKey] ?? thread }));
           setActiveChat(chatKey); setReturnPage(tab); navigate('ai');
         }} />
         : <CoachPage thread={activeThread} threads={Object.values(chats).filter(thread => thread.userId === userId)}
-          historyView={tab === 'ai-history'} loading={activeChat ? loadingChat === activeChat : false} onSend={question => {
+          historyView={tab === 'ai-history'} loading={activeChat ? loadingChat === activeChat : false}
+          loadingPhase={activeChat && loadingChat === activeChat ? loadingPhase : null} onSend={question => {
             if (!activeThread) throw new Error('No conversation selected.');
             sendQuestion(question, activeThread.id);
           }} onChoose={id => { setActiveChat(id); navigate('ai'); }}
