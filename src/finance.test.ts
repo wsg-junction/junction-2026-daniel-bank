@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isPerson } from './data.ts';
-import { answerQuestion, baskets, classify, euro, forecast, nextMonth, scenario } from './finance.ts';
+import { isPerson, isTransactionPage } from './data.ts';
+import type { Month } from './data.ts';
+import { answerQuestion, averageSpending, baskets, classify, euro, forecast, nextMonth, parseAmount, sandboxBalance, scenario, spendingScenario } from './finance.ts';
 
 function person(id: string) {
   const value: unknown = JSON.parse(readFileSync(new URL(`../public/demo/${id}.json`, import.meta.url), 'utf8'));
@@ -40,6 +41,47 @@ test('forecast backtests without looking beyond the chosen cutoff', () => {
   assert.equal(nextMonth('2026-12', 1), '2027-01');
   assert.throws(() => forecast(alex.monthly, '2024-11'), /at least/);
   assert.match(answerQuestion(alex, alex.monthly[0], 'What is my forecast?').text, /not enough/);
+});
+
+test('multiple category reductions add rounded savings without altering recorded amounts', () => {
+  const alex = person('CUST00115');
+  const original = alex.monthly.at(-1)!;
+  const snapshot = structuredClone(original);
+  const reductions = { Restaurants: 20, Groceries: 15 };
+  const combined = spendingScenario(original, reductions);
+  const restaurants = scenario(original, 'Restaurants', 20).saving;
+  const groceries = scenario(original, 'Groceries', 15).saving;
+  assert.equal(combined.saving, restaurants + groceries);
+  assert.equal(combined.savings.Restaurants, 4390);
+  assert.equal(combined.month.consumptionCents, original.consumptionCents - combined.saving);
+  assert.equal(Object.values(combined.month.categorySpendingCents).reduce((sum, value) => sum + value, 0),
+    combined.month.consumptionCents);
+  assert.equal(forecast(alex.monthly, original.month, combined.saving).points[2].central,
+    forecast(alex.monthly, original.month).points[2].central + combined.saving * 3);
+  assert.equal(spendingScenario(original, { ...reductions, Restaurants: 0 }).saving, groceries);
+  assert.equal(spendingScenario(original, {}).saving, 0);
+  const allRemoved = spendingScenario(original, Object.fromEntries(Object.keys(original.categorySpendingCents).map(name => [name, 100])));
+  assert.equal(allRemoved.month.consumptionCents, 0);
+  assert.deepEqual(original, snapshot);
+  assert.throws(() => spendingScenario(original, { Restaurants: 101 }), /between/);
+});
+
+test('range spending averages include missing categories and reconcile rounded cents', () => {
+  const original = person('CUST00115').monthly.at(-1)!;
+  assert.deepEqual(averageSpending([original]), {
+    categorySpendingCents: original.categorySpendingCents, consumptionCents: original.consumptionCents,
+  });
+  const months: Month[] = [
+    { ...original, categorySpendingCents: { Restaurants: 1, Groceries: 2 } },
+    { ...original, categorySpendingCents: { Restaurants: 2, Entertainment: 5 } },
+  ];
+  const baseline = averageSpending(months);
+  assert.deepEqual(baseline.categorySpendingCents, { Restaurants: 2, Groceries: 1, Entertainment: 3 });
+  assert.equal(baseline.consumptionCents, 6);
+  const changed = spendingScenario({ ...original, ...baseline }, { Restaurants: 50, Entertainment: 100 });
+  assert.equal(changed.saving, 4);
+  assert.equal(changed.month.consumptionCents, 2);
+  assert.throws(() => averageSpending([]), /at least one/);
 });
 
 test('forecast preserves a negative projected balance rather than clamping it', () => {
@@ -84,4 +126,36 @@ test('summary guard rejects malformed amounts and unordered history', () => {
   const alex = person('CUST00115');
   assert.equal(isPerson({ ...alex, monthly: [{ ...alex.monthly[0], incomeCents: 1.25 }, ...alex.monthly.slice(1)] }), false);
   assert.equal(isPerson({ ...alex, monthly: [...alex.monthly].reverse() }), false);
+});
+
+test('sandbox parses exact cents and shares one-time outflows with the adjusted forecast', () => {
+  assert.equal(parseAmount('12.34'), 1234);
+  assert.equal(parseAmount('0.01'), 1);
+  assert.equal(parseAmount('10.1'), 1010);
+  for (const invalid of ['0', '-1', '1.234', '', '1e3', 'Infinity']) assert.equal(parseAmount(invalid), null);
+  const alex = person('CUST00115');
+  const month = alex.monthly.at(-1)!;
+  const saved = scenario(month, 'Restaurants', 20).saving;
+  assert.equal(sandboxBalance(month.closingBalanceCents, 1234, 10000), 2918366);
+  const base = forecast(alex.monthly, month.month);
+  const changed = forecast(alex.monthly, month.month, saved, 11234);
+  changed.points.forEach((point, index) => {
+    const adjustment = saved * (index + 1) - 11234;
+    assert.equal(point.central, base.points[index].central + adjustment);
+    assert.equal(point.low, base.points[index].low + adjustment);
+    assert.equal(point.high, base.points[index].high + adjustment);
+  });
+  assert.equal(changed.mae, base.mae, 'Sandbox edits must not modify historical backtest error');
+  assert.throws(() => forecast(alex.monthly, month.month, -1));
+  assert.throws(() => sandboxBalance(100, -1, 0));
+});
+
+test('monthly transaction guard rejects wrong-month, duplicate and fractional records', () => {
+  const value: unknown = JSON.parse(readFileSync(new URL('../public/demo/transactions/CUST00115/2026-09.json', import.meta.url), 'utf8'));
+  assert.ok(isTransactionPage(value));
+  assert.equal(value.transactions.length, person('CUST00115').monthly.at(-1)!.transactionCount);
+  const first = value.transactions[0];
+  assert.equal(isTransactionPage({ ...value, month: '2026-08' }), false);
+  assert.equal(isTransactionPage({ ...value, transactions: [first, first] }), false);
+  assert.equal(isTransactionPage({ ...value, transactions: [{ ...first, amountCents: 1.5 }] }), false);
 });

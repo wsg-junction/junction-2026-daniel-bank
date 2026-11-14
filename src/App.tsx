@@ -1,290 +1,507 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { Button } from '@heroui/react';
-import { loadPerson, PEOPLE } from './data';
-import type { Month, Person } from './data';
-import { BalanceChart, CashFlowChart, CategoryTrend, SpendingChart } from './Charts';
+import { Avatar, Button, Dropdown, Slider } from '@heroui/react';
+import { loadPerson, loadTransactions, PEOPLE } from './data';
+import type { Month, Person, Transaction } from './data';
+
+function Markdown({ text }: { text: string }) {
+  const nodes: ReactNode[] = [];
+  let key = 0;
+  for (const line of text.split('\n')) {
+    if (nodes.length) nodes.push(<br key={key++} />);
+    const parts: ReactNode[] = [];
+    let rest = line;
+    while (rest) {
+      const bold = rest.match(/^(.*?)\*\*(.+?)\*\*(.*)/s);
+      const italic = rest.match(/^(.*?)\*(.+?)\*(.*)/s);
+      const code = rest.match(/^(.*?)`(.+?)`(.*)/s);
+      const first = [bold, italic, code]
+        .filter(Boolean)
+        .sort((a, b) => a![1].length - b![1].length)[0];
+      if (!first) { parts.push(rest); break; }
+      if (first[1]) parts.push(first[1]);
+      if (first === bold) parts.push(<strong key={key++}>{first[2]}</strong>);
+      else if (first === italic) parts.push(<em key={key++}>{first[2]}</em>);
+      else parts.push(<code key={key++}>{first[2]}</code>);
+      rest = first[3];
+    }
+    nodes.push(<span key={key++}>{parts}</span>);
+  }
+  return <>{nodes}</>;
+}
 import {
-  answerQuestion, basketColors, basketLabels, baskets, classify, euro, forecast,
-  monthLabel, observations, palette, scenario,
+  answerQuestion, answerQuestionExtended, averageSpending, basketLabels, baskets, classify, euro, forecast, monthLabel,
+  parseAmount, sandboxBalance, scenario, spendingScenario,
 } from './finance';
 import type { Answer, Basket, Overrides } from './finance';
 import { Icon } from './Icons';
-import type { IconName } from './Icons';
 
+const BalanceChart = lazy(() => import('./Charts').then(module => ({ default: module.BalanceChart })));
+const SpendingChart = lazy(() => import('./Charts').then(module => ({ default: module.SpendingChart })));
+const InvestmentChart = lazy(() => import('./Charts').then(module => ({ default: module.InvestmentChart })));
+const SpendingInsights = lazy(() => import('./Charts').then(module => ({ default: module.SpendingInsights })));
+const StockTickerLazy = lazy(() => import('./StockTicker').then(module => ({ default: module.StockTicker })));
 const tabs = [
-  { id: 'overview', label: 'Overview', icon: 'overview' },
-  { id: 'explore', label: 'Explore', icon: 'explore' },
-  { id: 'plan', label: 'Plan ahead', icon: 'plan' },
-  { id: 'coach', label: 'Your coach', icon: 'sparkle' },
+  { id: 'accounts', label: 'Accounts', icon: 'accounts' },
+  { id: 'spending', label: 'Spending', icon: 'spending' },
+  { id: 'payments', label: 'Payments', icon: 'payments' },
+  { id: 'investments', label: 'Investments', icon: 'investments' },
 ] as const;
 type Tab = typeof tabs[number]['id'];
+type Page = Tab | 'ai' | 'ai-history';
+type Payment = { id: number; recipient: string; amount: number };
+type Period = { start: number; end: number };
+type ChatMessage = { question: string; answer: Answer };
+type ChatThread = { id: string; userId: string; title: string; period: string; endingMonth: string; messages: ChatMessage[] };
 
-function currentTab(): Tab {
+function PeriodSlider({ months, value, onPreview, onChange }: {
+  months: Month[]; value: Period; onPreview: (value: Period) => void; onChange: (value: Period) => void;
+}) {
+  const last = months.length - 1;
+  const [tooltip, setTooltip] = useState<{ pos: number; label: string } | null>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeThumb = useRef<0 | 1>(1);
+  const toPeriod = (values: number | number[]): Period => {
+    if (!Array.isArray(values) || values.length !== 2 || !values.every(number => Number.isInteger(number) && number >= 0 && number <= last)
+      || values[0] > values[1]) throw new Error('Invalid month range.');
+    return { start: values[0], end: values[1] };
+  };
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const thumbs = (e.currentTarget as HTMLElement).querySelectorAll('[class*="slider__thumb"]');
+    if (thumbs.length === 2) {
+      const r0 = thumbs[0].getBoundingClientRect();
+      const r1 = thumbs[1].getBoundingClientRect();
+      const cx = e.clientX;
+      const d0 = Math.abs(cx - (r0.left + r0.width / 2));
+      const d1 = Math.abs(cx - (r1.left + r1.width / 2));
+      activeThumb.current = d0 <= d1 ? 0 : 1;
+    }
+  };
+  const handleChange = (values: number | number[]) => {
+    const p = toPeriod(values);
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    const movedIndex = activeThumb.current === 0 ? p.start : p.end;
+    setTooltip({ pos: movedIndex / last, label: monthLabel(months[movedIndex].month, true, '2-digit') });
+    onPreview(p);
+  };
+  const handleChangeEnd = (values: number | number[]) => {
+    onChange(toPeriod(values));
+    hideTimer.current = setTimeout(() => setTooltip(null), 600);
+  };
+  const tooltipLeft = tooltip ? `calc(12px + ${tooltip.pos} * (100% - 24px))` : '50%';
+  return <div style={{ position: 'relative', flex: 1 }} onPointerDown={handlePointerDown}>
+    {tooltip && <div className="slider-tooltip" style={{ left: tooltipLeft }}>
+      {tooltip.label}
+    </div>}
+    <Slider className="period-range" aria-label="Selected months" minValue={0} maxValue={last} step={1}
+      value={[value.start, value.end]} onChange={handleChange} onChangeEnd={handleChangeEnd}>
+      <Slider.Track>
+        <Slider.Fill />
+        <Slider.Thumb index={0} aria-label={`Starting month: ${monthLabel(months[value.start].month)}`} aria-describedby="period-help" />
+        <Slider.Thumb index={1} aria-label={`Ending month: ${monthLabel(months[value.end].month)}`} aria-describedby="period-help" />
+      </Slider.Track>
+      <p id="period-help" className="sr-only">Choose the first and last month. Spending uses monthly averages. Forecasts and cash experiments start from the ending month's observed balance.</p>
+    </Slider>
+  </div>;
+}
+
+function PersonMenu({ userId, onSelect }: { userId: string; onSelect: (id: string) => void }) {
+  const selected = PEOPLE.find(person => person.id === userId)!;
+  return <Dropdown>
+    <Dropdown.Trigger className="avatar-trigger" aria-label={`Switch demo person, currently ${selected.name}`}>
+      <Avatar className={`demo-avatar ${selected.color}`} aria-hidden="true"><Avatar.Fallback>{selected.initials}</Avatar.Fallback></Avatar>
+      <Icon name="dropdown" size={14} />
+    </Dropdown.Trigger>
+    <Dropdown.Popover className="person-menu" placement="bottom end">
+      <Dropdown.Menu aria-label="Choose demo person" selectionMode="single" selectedKeys={new Set([userId])}
+        onAction={key => {
+          const id = String(key);
+          if (!PEOPLE.some(person => person.id === id)) throw new Error('Unknown demo person selected.');
+          onSelect(id);
+        }}>
+        {PEOPLE.map(person => <Dropdown.Item key={person.id} id={person.id} textValue={person.name}>
+          <Avatar className={`demo-avatar ${person.color}`} aria-hidden="true"><Avatar.Fallback>{person.initials}</Avatar.Fallback></Avatar>
+          <div className="person-menu-copy"><strong>{person.name}</strong><span>{person.description}</span></div>
+          {person.id === userId && <Icon name="check" size={16} />}
+        </Dropdown.Item>)}
+      </Dropdown.Menu>
+    </Dropdown.Popover>
+  </Dropdown>;
+}
+
+function currentTab(): Page {
   const hash = window.location.hash.slice(1);
-  return tabs.find(tab => tab.id === hash)?.id ?? 'overview';
+  if (hash === 'ai') return 'ai';
+  if (hash === 'ai/history') return 'ai-history';
+  const legacy: Record<string, Tab> = { overview: 'accounts', explore: 'spending', plan: 'spending', coach: 'spending' };
+  return tabs.find(tab => tab.id === hash)?.id ?? legacy[hash] ?? 'accounts';
 }
 
-function Card({ title, eyebrow, action, children, className = '' }: {
-  title: string; eyebrow?: string; action?: ReactNode; children: ReactNode; className?: string;
+function Card({ title, children, className = '' }: { title: string; children: ReactNode; className?: string }) {
+  return <section className={`card ${className}`}><h2>{title}</h2>{children}</section>;
+}
+
+function Money({ label, amount, detail }: { label: string; amount: number; detail?: string }) {
+  return <div className="money"><span>{label}</span><strong>{euro(amount)}</strong>{detail && <small>{detail}</small>}</div>;
+}
+
+function InvestmentHeatmap({ person, start, end, onSelect }: {
+  person: Person; start: string; end: string; onSelect: (month: string) => void;
 }) {
-  return <section className={`card ${className}`}><div className="card-heading">
-    <div>{eyebrow && <p className="eyebrow">{eyebrow}</p>}<h2>{title}</h2></div>{action}
-  </div>{children}</section>;
-}
-
-function Metric({ label, value, detail, icon, color }: {
-  label: string; value: number; detail: string; icon: IconName; color: string;
-}) {
-  return <div className={`metric ${color}`}><div className="metric-top"><span>{label}</span>
-    <span className="metric-icon"><Icon name={icon} size={18} /></span></div>
-    <strong>{euro(value)}</strong><p>{detail}</p></div>;
-}
-
-function Landscape() {
-  return <div className="landscape" aria-hidden="true">
-    <div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="sun" />
-    <div className="hill hill-back" /><div className="hill hill-front" />
-    <div className="plant plant-one"><i /><i /><i /><span /></div>
-    <div className="plant plant-two"><i /><i /><span /></div>
-    <div className="floating-token"><Icon name="leaf" size={24} /></div>
-    <div className="floating-caption"><span className="tiny-spark"><Icon name="sparkle" size={14} /></span> Small steps. More possibilities.</div>
-  </div>;
-}
-
-function MortgageCard({ person, month, ask }: { person: Person; month: Month; ask: (question: string) => void }) {
-  const mortgage = person.mortgages[0];
-  const events = mortgage?.events.filter(event => event.timestamp.slice(0, 7) <= month.month) ?? [];
-  const hasDecision = events.some(event => event.type === 'loan_decision');
-  const milestoneTypes = ['application_created', 'property_added', 'collateral_added', 'loan_calculation', 'loan_decision'];
-  const milestones = events.filter(event => milestoneTypes.includes(event.type));
-  return <Card title="A little context for big plans" eyebrow="Mortgage journey"
-    action={<span className="icon-tile"><Icon name="house" /></span>}>
-    {!mortgage || !events.length ? <div className="empty-mortgage"><span className="empty-icon"><Icon name="house" size={32} /></span>
-      <h3>No application data in this period</h3><p>There is no mortgage history available here. That doesn't mean this person has no mortgage or housing costs.</p>
-    </div> : <>
-      <div className="mortgage-summary"><span className={`status-pill ${hasDecision && mortgage.decision === 'rejected' ? 'rejected' : ''}`}>
-        <Icon name={hasDecision && mortgage.decision === 'approved' ? 'check' : 'info'} size={14} />
-        {hasDecision ? `Application ${mortgage.decision}` : 'Application in progress'}
-      </span>
-        {hasDecision && <div><strong>{mortgage.requestedLoanCents === null ? 'Not provided' : euro(mortgage.requestedLoanCents, true)}</strong><span>Requested loan · not current debt</span></div>}
-      </div>
-      {hasDecision && mortgage.rejectionReason && <p className="note">Decision reason: {mortgage.rejectionReason.replaceAll('_', ' ')}.</p>}
-      <ol className="timeline">{milestones.map((event, index) => <li key={`${event.timestamp}-${index}`}><span className="timeline-dot" />
-        <div><strong>{event.type.replaceAll('_', ' ')}</strong><small>{event.timestamp.slice(0, 10)}</small></div></li>)}</ol>
-      <Button variant="ghost" size="sm" className="text-button" onPress={() => ask('Explain my mortgage application')}>
-        Understand this application <Icon name="arrow" size={16} /></Button>
-    </>}
-    <p className="note">Application records do not establish disbursement, repayment schedules, or current debt.</p>
-  </Card>;
-}
-
-function Coach({ person, month, initialQuestion }: { person: Person; month: Month; initialQuestion: string | null }) {
-  const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<{ question: string; answer: Answer }[]>(() =>
-    initialQuestion ? [{ question: initialQuestion, answer: answerQuestion(person, month, initialQuestion) }] : []);
-  const latest = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const ask = (question: string) => {
-    if (!question.trim()) return;
-    setMessages(items => [...items, { question, answer: answerQuestion(person, month, question) }]);
-    setInput('');
-  };
-  useEffect(() => {
-    if (messages.length) latest.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [messages.length]);
-  const prompts = ['Where does my money go?', 'Why did my spending change?', 'Reduce restaurants by 20%', 'Explain my transfers', 'What is my forecast?', 'How much did I spend on taxis?'];
-  const submit = (event: FormEvent) => { event.preventDefault(); ask(input); };
-  return <div className="coach-layout">
-    <div className="coach-main">
-      <div className="coach-intro"><span className="coach-orb"><Icon name="sparkle" size={32} /></span>
-        <span className="tag">Your money, in plain language</span><h2>Let's make sense<br />of your money.</h2>
-        <p>No judgment. Just a clearer picture, one question at a time.</p></div>
-      <div className="prompt-grid">{prompts.map(prompt => <Button key={prompt} variant="outline"
-        className="prompt-button" onPress={() => ask(prompt)}>{prompt}<Icon name="arrow" size={16} /></Button>)}</div>
-      <div className="messages" aria-live="polite" aria-relevant="additions">{messages.map((message, index) =>
-        <div key={index} className="message-pair">
-          <div className="user-message">{message.question}</div>
-          <div className="coach-message"><span className="message-avatar"><Icon name="sparkle" size={18} /></span>
-            <div><p>{message.answer.text}</p><div className="evidence"><Icon name="check" size={13} />{message.answer.evidence}</div>
-              <details><summary>Source & limitations</summary><p className="note">{message.answer.caveat}</p></details></div></div>
-        </div>)}</div><div ref={latest} />
-      <form className="coach-form" onSubmit={submit}><label className="sr-only" htmlFor="coach-question">Ask about the selected person's finances</label>
-        <input ref={inputRef} id="coach-question" value={input} onChange={event => setInput(event.target.value)}
-          placeholder="Ask about spending, transfers, or a what-if…" maxLength={500} autoComplete="off" />
-        <Button type="submit" isDisabled={!input.trim()} isIconOnly aria-label="Send question" className="send-button"><Icon name="arrow" /></Button></form>
-      <p className="coach-disclosure">Local demo coach · calculated from your selected JSON · live AI is not connected</p>
+  const largest = Math.max(1, ...person.monthly.map(month => Math.abs(month.investmentDepositsCents - month.investmentWithdrawalsCents)));
+  return <>
+    <p className="note">All observed months · select a cell to inspect that month. Color shows net transfers, not returns.</p>
+    <div className="investment-heatmap" role="group" aria-label="Monthly investment transfer calendar">
+      {person.monthly.map(month => {
+        const net = month.investmentDepositsCents - month.investmentWithdrawalsCents;
+        const level = net === 0 ? 0 : Math.min(3, Math.ceil(Math.abs(net) / largest * 3));
+        return <button key={month.month} className={`heat-cell ${net >= 0 ? 'deposit' : 'withdrawal'} level-${level}`}
+          aria-pressed={month.month >= start && month.month <= end}
+          aria-label={`${monthLabel(month.month)}: deposits ${euro(month.investmentDepositsCents)}, withdrawals ${euro(month.investmentWithdrawalsCents)}, net contribution ${euro(net)}. Select this month.`}
+          title={`${monthLabel(month.month)} · deposits ${euro(month.investmentDepositsCents)} · withdrawals ${euro(month.investmentWithdrawalsCents)}`}
+          onClick={() => onSelect(month.month)}>
+          <span>{monthLabel(month.month, true)}</span><strong>{net > 0 ? '+' : ''}{euro(net, true)}</strong>
+        </button>;
+      })}
     </div>
-    <aside className="coach-context card"><p className="eyebrow">Your conversation context</p><h3>{person.profile.name}'s snapshot</h3>
-      <span className={`avatar ${person.profile.color}`}>{person.profile.initials}</span>
-      <dl><div><dt>Period</dt><dd>{monthLabel(month.month)}</dd></div><div><dt>Income</dt><dd>{euro(month.incomeCents)}</dd></div>
-        <div><dt>Consumption</dt><dd>{euro(month.consumptionCents)}</dd></div><div><dt>Net cash flow</dt><dd>{euro(month.netCashFlowCents)}</dd></div></dl>
-      <div className="context-note"><Icon name="info" /><p>Answers use this period. Changing person or month starts a fresh conversation. No banking data leaves this website.</p></div>
-      <h4>What I won't guess</h4><p className="note">Merchant names, future bills, guaranteed returns, safe-to-spend amounts, or data from other accounts.</p>
-    </aside>
-  </div>;
+    <div className="chart-legend"><span><i style={{ background: '#176343' }} />Net contribution</span>
+      <span><i style={{ background: '#305dc0' }} />Net withdrawal</span><span>No activity = grey</span></div>
+  </>;
 }
 
-function Dashboard({ person, tab, navigate }: { person: Person; tab: Tab; navigate: (tab: Tab) => void }) {
-  const [period, setPeriod] = useState(person.monthly.at(-1)!.month);
+function CoachCard({ messages, onSend, onExpand, full = false, loading = false }: {
+  messages: ChatMessage[]; onSend: (question: string) => void; onExpand?: () => void; full?: boolean; loading?: boolean;
+}) {
+  const [input, setInput] = useState('');
+  const [collapsed, setCollapsed] = useState(false);
+  const history = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (history.current) history.current.scrollTop = history.current.scrollHeight;
+  }, [messages.length]);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!input.trim()) return;
+    onSend(input.trim()); setInput('');
+  };
+  const isExpanded = (!!messages.length || loading) && !collapsed;
+  const hasContent = !!messages.length || loading;
+  return <section className={`coach-card ${full ? 'full-coach' : ''} ${collapsed ? 'collapsed' : ''}`} aria-label="Money coach">
+    <div className="coach-header">
+      <form className="coach-input" onSubmit={submit}>
+        <label htmlFor="coach-question" className="sr-only">Ask the money coach about your finances</label>
+        <input id="coach-question" value={input} maxLength={500} onChange={event => setInput(event.target.value)}
+          placeholder="Ask your money" autoComplete="off" disabled={collapsed} />
+        <Button type="submit" variant="ghost" isIconOnly isDisabled={!input.trim() || collapsed || loading} aria-label="Send question"><Icon name="arrow" size={18} /></Button>
+        {onExpand && <Button variant="ghost" isIconOnly isDisabled={collapsed || loading} aria-label="Open full conversation" onPress={onExpand}><Icon name="expand" size={18} /></Button>}
+        {hasContent && <Button variant="ghost" isIconOnly aria-label={collapsed ? 'Expand chat' : 'Collapse chat'} onPress={() => setCollapsed(v => !v)}><Icon name={collapsed ? 'dropdown' : 'chevron-up'} size={18} /></Button>}
+      </form>
+    </div>
+    {isExpanded && <><div ref={history} className="coach-history" role="log" aria-label="Conversation history" aria-live="polite" aria-relevant="additions">
+      {messages.map((message, index) => <div key={index} className="coach-exchange">
+        <p className="coach-question">{message.question}</p>
+        <div className="coach-answer"><p><Markdown text={message.answer.text} /></p>
+          <details><summary>Source & limits</summary><p>{message.answer.evidence}</p><p>{message.answer.caveat}</p></details></div>
+      </div>)}
+      {loading && <div className="coach-exchange"><p className="coach-answer note" role="status">Thinking…</p></div>}
+    </div>
+    <div className="coach-footer">
+      <span />
+    </div></>}
+  </section>;
+}
+
+function CoachPage({ thread, threads, onSend, onChoose, onHistory, onBack, historyView, loading }: {
+  thread: ChatThread | null; threads: ChatThread[]; onSend: (question: string) => void;
+  onChoose: (id: string) => void; onHistory: () => void; onBack: () => void; historyView: boolean; loading: boolean;
+}) {
+  return <section className="coach-page">
+    <div className="coach-page-heading">
+      <Button variant="ghost" onPress={historyView ? onBack : onHistory}><Icon name="back" size={16} />{historyView ? 'Back to finances' : 'All chats'}</Button>
+      <h1>{historyView ? 'Your conversations' : 'Your money coach'}</h1>
+    </div>
+    {historyView ? <>
+      <p className="note">This person's conversations from this session. Refreshing clears them.</p>
+      {threads.length ? <ul className="chat-thread-list">{[...threads].reverse().map(item => <li key={item.id}>
+        <button onClick={() => onChoose(item.id)}><Icon name="chat" /><span><strong>{item.title}</strong>
+          <small>{item.period} · {item.messages.length} {item.messages.length === 1 ? 'question' : 'questions'}</small></span><Icon name="chevron" size={18} /></button>
+      </li>)}</ul> : <p className="empty">No conversations yet. Ask a question from a finance page to start one.</p>}
+    </> : thread ? <>
+      <p className="note">{thread.title} · {thread.period}. Answers use {monthLabel(thread.endingMonth)}.</p>
+      <CoachCard key={thread.id} full messages={thread.messages} onSend={onSend} loading={loading} />
+    </> : <p className="empty">Choose a conversation from All chats or start one from a finance page.</p>}
+  </section>;
+}
+
+function Transactions({ person, months, mode = 'all' }: { person: Person; months: Month[]; mode?: 'all' | 'payments' | 'investments' }) {
+  const [transactions, setTransactions] = useState<Transaction[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [limit, setLimit] = useState(10);
+  useEffect(() => {
+    const controller = new AbortController();
+    setTransactions(null); setError(null);
+    Promise.all([...months].reverse().map(month => loadTransactions(person.userId, month, controller.signal))).then(pages => {
+      if (!controller.signal.aborted) setTransactions(pages.flatMap(page => page.transactions));
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        console.error('Failed to load transaction page:', error);
+        setError(error instanceof Error ? error.message : 'Could not load transaction history.');
+      }
+    });
+    return () => controller.abort();
+  }, [person.userId, months, retry]);
+  if (error) return <div role="alert" className="error"><p>{error}</p>
+    <Button variant="outline" onPress={() => setRetry(value => value + 1)}>Retry transactions</Button></div>;
+  if (!transactions) return <p className="note" role="status">Loading transactions for the selected months…</p>;
+  const types = [...new Set(transactions.map(row => row.type))].sort();
+  const rows = transactions.filter(row => {
+    if (mode === 'payments' && (row.amountCents >= 0 || ['investment_deposit', 'salary_sweep'].includes(row.type))) return false;
+    if (mode === 'investments' && !['investment_deposit', 'investment_withdrawal'].includes(row.type)) return false;
+    return (filter === 'all' || row.type === filter)
+      && `${row.category} ${row.type.replaceAll('_', ' ')} ${row.timestamp}`.toLowerCase().includes(search.toLowerCase());
+  });
+  return <>
+    <div className="transaction-controls"><label>Search history<input type="search" value={search}
+      placeholder="Category, type or date" onChange={event => { setSearch(event.target.value); setLimit(10); }} /></label>
+      {mode === 'all' && <label>Transaction type<select value={filter} onChange={event => { setFilter(event.target.value); setLimit(10); }}>
+        <option value="all">All types</option>{types.map(type => <option key={type} value={type}>{type.replaceAll('_', ' ')}</option>)}
+      </select></label>}</div>
+    <p className="note" role="status">{rows.length} matching records · newest first · merchant names unavailable</p>
+    <ul className="transaction-list" aria-label={`Recorded ${mode === 'all' ? 'transactions' : mode} from ${monthLabel(months[0].month)} through ${monthLabel(months.at(-1)!.month)}`}>
+      {rows.slice(0, limit).map(row => <li key={row.id}>
+        <span className={`transaction-icon ${row.amountCents >= 0 ? 'incoming' : ''}`}><Icon name={row.amountCents >= 0 ? 'down' : 'up'} size={18} /></span>
+        <div className="transaction-description"><strong>{row.category}</strong>
+          <span>{row.type.replaceAll('_', ' ')} · <time dateTime={row.timestamp}>{row.timestamp.slice(0, 10)}</time></span></div>
+        <strong className={`transaction-amount ${row.amountCents >= 0 ? 'incoming' : ''}`}>
+          {row.amountCents > 0 ? '+' : ''}{euro(row.amountCents)}</strong>
+      </li>)}</ul>
+    {!rows.length && <p className="empty">No matching records in the selected months. Missing records do not prove no real-world activity.</p>}
+    {rows.length > limit && <Button variant="outline" onPress={() => setLimit(value => value + 10)}
+      aria-label="Show ten more recorded transactions">Show more ({rows.length - limit} remaining)</Button>}
+  </>;
+}
+
+function Workbench({ person, months, tab, onChooseMonth }: { person: Person; months: Month[]; tab: Tab; onChooseMonth: (month: string) => void }) {
+  const month = months.at(-1)!;
+  const start = months[0].month;
+  const spendingBaseline = { ...month, ...averageSpending(months) };
+  const rangeTotals = months.reduce((totals, item) => ({
+    income: totals.income + item.incomeCents,
+    consumption: totals.consumption + item.consumptionCents,
+    cashFlow: totals.cashFlow + item.netCashFlowCents,
+    deposits: totals.deposits + item.investmentDepositsCents,
+    withdrawals: totals.withdrawals + item.investmentWithdrawalsCents,
+    sweeps: totals.sweeps + item.salarySweepsCents,
+  }), { income: 0, consumption: 0, cashFlow: 0, deposits: 0, withdrawals: 0, sweeps: 0 });
   const [category, setCategory] = useState('Restaurants');
-  const [reduction, setReduction] = useState(20);
-  const [goal, setGoal] = useState('1000');
+  const [reductions, setReductions] = useState<Record<string, number>>({});
   const [overrides, setOverrides] = useState<Overrides>({});
-  const [initialQuestion, setInitialQuestion] = useState<string | null>(null);
-  const [coachSession, setCoachSession] = useState(0);
-  const month = person.monthly.find(month => month.month === period)!;
-  const history = person.monthly.filter(item => item.month <= period);
-  const prediction = history.length >= 4 ? forecast(person.monthly, period) : null;
-  const spending = Object.entries(month.categorySpendingCents).sort((a, b) => b[1] - a[1]);
-  const allCategories = [...new Set(person.monthly.flatMap(month => Object.keys(month.categorySpendingCents)))].sort();
-  const basketTotals = baskets(month, overrides);
-  const simulation = scenario(month, category, reduction);
-  const goalCents = Number(goal) * 100;
-  const goalMonths = Number.isFinite(goalCents) && goalCents > 0 && simulation.saving > 0
-    ? Math.ceil(goalCents / simulation.saving) : null;
-  const ask = (question: string) => {
-    setInitialQuestion(question); setCoachSession(value => value + 1); navigate('coach');
-  };
-  const changePeriod = (value: string) => {
-    setPeriod(value); setInitialQuestion(null); setCoachSession(value => value + 1);
-  };
-  const sectionTitles = {
-    overview: ['Your money, understood.', 'A little clarity today. A little more freedom tomorrow.'],
-    explore: ['Follow your curiosity.', 'Look closer. Find the patterns behind the numbers.'],
-    plan: ['Small changes. Big possibilities.', 'Explore what could happen, without guessing what will.'],
-    coach: ['Meet your money coach.', 'A space to ask questions, explore, and learn.'],
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [recipient, setRecipient] = useState('');
+  const [paymentInput, setPaymentInput] = useState('');
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [contribution, setContribution] = useState(0);
+  const [notice, setNotice] = useState('');
+  const [investmentView, setInvestmentView] = useState<'calendar' | 'chart'>('calendar');
+  const paymentTotal = payments.reduce((sum, payment) => sum + payment.amount, 0);
+  const outflow = paymentTotal + contribution;
+  const balance = sandboxBalance(month.closingBalanceCents, paymentTotal, contribution);
+  const reduction = reductions[category] ?? 0;
+  const simulation = scenario(spendingBaseline, category, reduction);
+  const combined = spendingScenario(spendingBaseline, reductions);
+  const revisedMonth = combined.month;
+  const reducedCount = Object.values(combined.savings).filter(amount => amount > 0).length;
+  const model = person.monthly.filter(item => item.month <= month.month).length >= 4
+    ? forecast(person.monthly, month.month, combined.saving, outflow) : null;
+  const baseline = model ? forecast(person.monthly, month.month) : null;
+  const categories = [...new Set(person.monthly.filter(item => item.month <= month.month)
+    .flatMap(item => Object.keys(item.categorySpendingCents)))].sort();
+  const basketTotals = baskets(revisedMonth, overrides);
+  const addPayment = (event: FormEvent) => {
+    event.preventDefault();
+    const amount = parseAmount(paymentInput);
+    if (!recipient.trim() || recipient.trim().length > 60 || amount === null) {
+      setPaymentError('Enter a recipient and a positive EUR amount with at most two decimal places.'); return;
+    }
+    if (amount > balance) {
+      setPaymentError('This payment exceeds the cash available in your experiment. Remove a test payment, reduce your contribution, or enter a smaller amount.'); return;
+    }
+    setPayments(items => [...items, { id: (items.at(-1)?.id ?? 0) + 1, recipient: recipient.trim(), amount }]);
+    setPaymentError(null); setPaymentInput(''); setRecipient('');
+    setNotice(`Simulated payment of ${euro(amount)} added. No money was sent.`);
   };
   return <>
-    <header className="page-heading"><div><p className="eyebrow">MY FINANCIAL PICTURE</p>
-      <h1>{sectionTitles[tab][0]}</h1><p>{sectionTitles[tab][1]}</p></div>
-      <label className="period-control"><span>Viewing month</span>
-        <select aria-label="Viewing month" value={period} onChange={event => changePeriod(event.target.value)}>
-          {[...person.monthly].reverse().map(month => <option key={month.month} value={month.month}>{monthLabel(month.month)}</option>)}
-        </select></label></header>
-    {tab === 'overview' && <section className="welcome-banner"><div className="welcome-copy">
-      <span className="tag"><span className="live-dot" />A moment for your money</span>
-      <h2>Hey {person.profile.name},<br />let's grow your peace of mind.</h2>
-      <p>You don't need to be a money expert.<br className="desktop-break" /> You just need a good place to start.</p>
-      <Button className="primary-button" onPress={() => ask('Give me a spending summary')}><Icon name="sparkle" size={17} />Explore with your coach<Icon name="arrow" size={17} /></Button>
-    </div><Landscape /></section>}
-    {tab !== 'coach' && <div className="metrics-grid">
-      <Metric label="Observed balance" value={month.closingBalanceCents} detail={`Recorded ${month.balanceObservedAt.slice(0, 10)} · not live`} icon="wallet" color="balance" />
-      <Metric label="Money in" value={month.incomeCents} detail="Salary & other income · no transfers" icon="down" color="income" />
-      <Metric label="Everyday spending" value={month.consumptionCents} detail="All consumption · transfers excluded" icon="up" color="spending" />
-      <Metric label="Before transfers" value={month.surplusBeforeTransfersCents} detail="Income minus consumption · not savings" icon="leaf" color="surplus" />
-    </div>}
-    {tab === 'overview' && <>
-      <div className="main-grid"><Card title="The bigger picture" eyebrow="Your observed balance"
-        action={<Button variant="ghost" size="sm" className="text-button" onPress={() => navigate('plan')}>See forecast<Icon name="arrow" size={15} /></Button>}>
-        <div className="chart-headline"><strong>{euro(month.closingBalanceCents)}</strong>
-          <span className={`soft-badge ${month.netCashFlowCents < 0 ? 'negative' : ''}`}>{month.netCashFlowCents >= 0 ? '+' : ''}{euro(month.netCashFlowCents)} this month</span></div>
-        <BalanceChart months={person.monthly} cutoff={period} /></Card>
-        <Card title="Where it went" eyebrow={monthLabel(period)}>
-          <SpendingChart month={month} selected="" onSelect={value => { setCategory(value); navigate('explore'); }} />
-          <Button variant="ghost" size="sm" className="text-button full-link" onPress={() => navigate('explore')}>Explore all spending<Icon name="arrow" size={16} /></Button>
-        </Card></div>
-      <div className="section-heading"><div><p className="eyebrow">More than numbers</p><h2>A few things worth noticing</h2></div><span className="muted small">Based on {monthLabel(period)}</span></div>
-      <div className="insights-grid">{observations(person, month).map(insight =>
-        <button key={insight.title} className={`insight-card ${insight.tone}`} onClick={() => ask(insight.question)}>
-          <span className="insight-icon"><Icon name={insight.tone === 'green' ? 'leaf' : insight.tone === 'purple' ? 'sparkle' : 'explore'} /></span>
-          <h3>{insight.title}</h3><p>{insight.text}</p><span className="insight-action">Let's unpack this<Icon name="arrow" size={16} /></span>
-        </button>)}</div>
-      <div className="two-columns"><Card title="Income meets everyday life" eyebrow="Cash flow, clearly">
-        <CashFlowChart months={person.monthly} cutoff={period} /></Card>
-        <section className="scenario-teaser"><span className="tag"><Icon name="plan" size={15} />A small what-if</span>
-          <h2>Same you.<br />A little more room.</h2><p>What if restaurant spending was 20% lower?</p>
-          <strong>{euro(scenario(month, 'Restaurants', 20).saving)}<small>potentially freed up / month</small></strong>
-          <Button variant="secondary" className="light-button" onPress={() => { setCategory('Restaurants'); setReduction(20); navigate('plan'); }}>Try your own scenario<Icon name="arrow" size={17} /></Button>
-          <p className="tiny">Based on {monthLabel(period)}. A hypothetical change, not achieved savings.</p></section></div>
+    <p className="sr-only" role="status" aria-live="polite">{notice}</p>
+    {tab === 'accounts' && <>
+      <Card title="Account balance">
+        <div className="account-balance"><Money label="Observed account balance" amount={month.closingBalanceCents}
+          detail={`Recorded ${month.balanceObservedAt.slice(0, 10)} · not a live balance`} /></div>
+        <Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={person.monthly} start={start} cutoff={month.month} /></Suspense>
+        <details><summary>Cash flow & mortgage context</summary>
+          <div className="stat-row"><Money label="Income in selected months" amount={rangeTotals.income} />
+            <Money label="Spending in selected months" amount={rangeTotals.consumption} /><Money label="Net cash flow, including transfers" amount={rangeTotals.cashFlow} /></div>
+          <p className="note">{person.coverage.observedAccountCount} observed account · EUR · synthetic data.
+            {answerQuestion(person, month, 'Explain my mortgage').text}</p>
+        </details>
+        {outflow > 0 && <details><summary>How your experiments affect cash</summary>
+          <p className="note">Test payments of {euro(paymentTotal)} and an extra contribution of {euro(contribution)} would leave {euro(balance)}.
+            The recorded balance and transaction history are unchanged.</p></details>}
+      </Card>
+      <Card title="Transactions"><Transactions person={person} months={months} /></Card>
     </>}
-    {tab === 'explore' && <>
-      <div className="main-grid"><Card title="Your spending, unpacked" eyebrow="Consumption · not transfers">
-        <SpendingChart month={month} selected={category} onSelect={setCategory} />
-        <p className="note">Select a category below to see its full history. Merchant names are not present in the source.</p></Card>
-        <Card title="Three baskets. A clearer picture." eyebrow="How your money works">
-          <div className="basket-bar">{(Object.keys(basketTotals) as Basket[]).map(basket =>
-            <span key={basket} style={{ width: `${month.consumptionCents ? basketTotals[basket] / month.consumptionCents * 100 : 0}%`, background: basketColors[basket] }} />)}</div>
-          <div className="basket-list">{(Object.keys(basketLabels) as Basket[]).map(basket =>
-            <div key={basket}><i style={{ background: basketColors[basket] }} /><span>{basketLabels[basket]}</span><strong>{euro(basketTotals[basket])}</strong></div>)}</div>
-          <div className="context-note"><Icon name="info" /><p>Category-based suggestions, not proven necessities or recurring bills. Ambiguous spending stays unclassified. You can change each basket below.</p></div>
-        </Card></div>
-      <Card title="Every category has a story" eyebrow="Choose one to look closer" className="category-card">
-        <div className="category-pills">{allCategories.map(value => <button key={value} onClick={() => setCategory(value)}
-          aria-pressed={category === value} className={category === value ? 'active' : ''}>{value}</button>)}</div>
-        <div className="category-detail"><div><h3>{category}</h3><strong>{euro(month.categorySpendingCents[category] ?? 0)}</strong>
-          <p>{month.categoryCounts[category] ?? 0} identified payments in {monthLabel(period)}</p></div>
-          <Button variant="outline" size="sm" onPress={() => ask(`How much did I spend on ${category}?`)}><Icon name="sparkle" size={16} />Explain this</Button></div>
-        <CategoryTrend months={person.monthly} cutoff={period} category={category} />
-        <p className="note">No category amount means no identified consumption in these records, not proof of no real-world obligations.</p>
+    {tab === 'spending' && <>
+      <Card title={combined.saving ? 'Your spending experiment' : 'Spending mix'} className="spending-card">
+        <div className="spending-playground">
+        <Suspense fallback={<p role="status">Loading chart…</p>}><SpendingChart compact averaged={months.length > 1} month={revisedMonth}
+          savings={combined.savings} selected={category} onSelect={setCategory} /></Suspense>
+        <div className="spending-controls">
+        <label className="field">Spending category<select value={category} onChange={event => setCategory(event.target.value)}>
+          {categories.map(name => <option key={name}>{name}</option>)}</select></label>
+        <div className="slider-label"><label htmlFor="reduction">Monthly reduction{months.length > 1 ? ' · on average' : ''}</label><strong>{reduction}%</strong></div>
+        <input id="reduction" type="range" min="0" max="100" step="5" value={reduction}
+          aria-valuetext={`${reduction} percent reduction, freeing ${euro(simulation.saving)} per month`}
+          onChange={event => {
+            const value = Number(event.target.value);
+            setReductions(values => ({ ...values, [category]: value }));
+          }} />
+        <div className="result compact-result" role="status" aria-live="polite"><span>Total potentially freed up each month</span><strong>{euro(combined.saving)}</strong>
+          <p>Across {reducedCount} reduced {reducedCount === 1 ? 'category' : 'categories'}</p>
+          <p>{category}: {euro(simulation.baseline)} → {euro(simulation.remaining)}</p></div>
+        <div className="reduction-actions">
+        <Button variant="outline" isDisabled={reduction === 0} onPress={() => {
+          setReductions(values => ({ ...values, [category]: 0 })); setNotice(`${category} reduction reset.`);
+        }}><Icon name="reset" size={16} />Restore this category</Button>
+        {Object.values(reductions).some(value => value > 0) && <Button variant="ghost" onPress={() => {
+          setReductions({}); setNotice('All spending reductions reset.');
+        }}>Reset all reductions</Button>}
+        </div>
+        </div></div>
+        <details><summary>What this experiment assumes</summary>
+          <p className="note">Baseline: {months.length} selected {months.length === 1 ? 'month' : 'months'}, {monthLabel(start)} through {monthLabel(month.month)}.
+            Average monthly consumption: {euro(spendingBaseline.consumptionCents)}. With your changes: {euro(revisedMonth.consumptionCents)}.
+            Each category is averaged over all selected months, including months with no observed spending in that category, and rounded to cents; totals sum those rounded averages.
+            Each category keeps its own reduction when you switch categories. All reductions repeat monthly; other spending stays unchanged.
+            Green negative amounts show hypothetical reductions, not achieved savings or a safe-to-spend amount.</p></details>
       </Card>
-      <Card title="Put spending in its place" eyebrow="Your context matters">
-        <p className="note">Overrides apply to this person's categories for this session only. “Essential · irregular” is never inferred from category alone.</p>
-        <div className="table-scroll"><table className="spending-table"><thead><tr><th>Category</th><th>Amount</th><th>Payments</th><th>Basket suggestion</th><th>Basis</th></tr></thead>
-          <tbody>{spending.map(([name, amount], index) => <tr key={name}><td><button className="table-category" onClick={() => setCategory(name)}>
-            <i style={{ background: palette[index % palette.length] }} />{name}</button></td><td>{euro(amount)}</td><td>{month.categoryCounts[name]}</td>
-            <td><select aria-label={`${name} spending basket`} value={classify(name, overrides)}
-              onChange={event => {
-                const basket = event.target.value;
-                if (basket === 'regular' || basket === 'irregular' || basket === 'everyday' || basket === 'unclassified') {
-                  setOverrides(values => ({ ...values, [name]: basket }));
-                }
-              }}>{(Object.keys(basketLabels) as Basket[]).map(basket => <option key={basket} value={basket}>{basketLabels[basket]}</option>)}</select></td>
-            <td><span className="basis-label">{overrides[name] ? 'Your choice' : classify(name, {}) === 'unclassified' ? 'Unknown' : 'Tentative'}</span></td></tr>)}</tbody></table></div>
+      <Card title="Spending patterns">
+        <Suspense fallback={<p role="status">Loading spending insights…</p>}><SpendingInsights
+          months={months} reductions={reductions} selected={category} /></Suspense>
       </Card>
-      <Card title="Money moving is not money spent" eyebrow="Transfers, kept separate">
-        <div className="transfer-grid"><div><span>Investment deposits</span><strong>{euro(month.investmentDepositsCents)}</strong><small>Outflow to investments</small></div>
-          <div><span>Investment withdrawals</span><strong>{euro(month.investmentWithdrawalsCents)}</strong><small>Asset transfer, not income</small></div>
-          <div><span>Salary sweeps</span><strong>{euro(month.salarySweepsCents)}</strong><small>Destination unknown</small></div>
-          <div><span>Net cash flow</span><strong>{euro(month.netCashFlowCents)}</strong><small>Includes all transactions</small></div></div>
-        <Button variant="ghost" size="sm" className="text-button" onPress={() => ask('Explain my transfers')}>Why this distinction matters<Icon name="arrow" size={16} /></Button>
+      <Card title="Three months ahead">
+        {model && baseline ? <><Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={person.monthly} cutoff={month.month}
+            start={start} prediction monthlySaving={combined.saving} oneTimeOutflow={outflow} /></Suspense>
+          <div className="comparison" role="status" aria-live="polite">
+            <Money label="Next month, baseline" amount={baseline.points[0].central} />
+            <Money label="Next month, your scenario" amount={model.points[0].central} detail={`Monthly change +${euro(combined.saving)}; one-time outflows ${euro(outflow)}`} /></div>
+          <details><summary>Assumptions & uncertainty</summary><p className="note">Average net cash flow from the last three observed months through the selected month: {euro(model.net)} per month, including transfers.
+            Your combined reductions add {euro(combined.saving)} each future month; sandbox payments and the investment contribution subtract {euro(outflow)} once at the start.
+            Historical one-month mean absolute error: {euro(model.mae)} over {model.backtestCount} checks. No data after the selected month is used.
+            The range uses the larger of that error and the largest training-window deviation, widening linearly. It is a sensitivity band, not a confidence interval.
+            No bill dates, missing obligations, returns or fees are predicted. Negative forecasts are retained.</p></details></>
+          : <p className="empty">Select a later month. At least four observed months are needed for a forecast and historical check.</p>}
       </Card>
+      <details className="basket-details"><summary>Sort spending into three baskets</summary>
+        <p className="note">Tentative suggestions, not proven necessities. You decide what fits; ambiguous categories stay unclassified.</p>
+        <dl className="basket-totals">{(Object.keys(basketLabels) as Basket[]).map(basket =>
+          <div key={basket}><dt>{basketLabels[basket]}</dt><dd>{euro(basketTotals[basket])}</dd></div>)}</dl>
+        <div className="basket-fields">{Object.keys(spendingBaseline.categorySpendingCents).sort().map(name =>
+          <label key={name}>{name}<select value={classify(name, overrides)} aria-label={`${name} spending basket`} onChange={event => {
+            const value = event.target.value;
+            if (value === 'regular' || value === 'irregular' || value === 'everyday' || value === 'unclassified') {
+              setOverrides(items => ({ ...items, [name]: value }));
+            }
+          }}>{(Object.keys(basketLabels) as Basket[]).map(basket => <option key={basket} value={basket}>{basketLabels[basket]}</option>)}</select></label>)}</div>
+      </details>
     </>}
-    {tab === 'plan' && <>
-      <div className="two-columns plan-grid"><Card title="What if you changed one thing?" eyebrow="The possibility playground" className="simulator">
-        <p className="card-description">Not a budget that tells you “no”. A little experiment that shows you what's possible.</p>
-        <label className="field-label">Spending category<select value={category} aria-label="Scenario category"
-          onChange={event => setCategory(event.target.value)}>{allCategories.map(name => <option key={name}>{name}</option>)}</select></label>
-        <div className="slider-heading"><label htmlFor="reduction">Reduce spending by</label><strong>{reduction}%</strong></div>
-        <input type="range" id="reduction" min="0" max="100" step="5" value={reduction} onChange={event => setReduction(Number(event.target.value))} />
-        <div className="range-labels"><span>A tiny change</span><span>A fresh start</span></div>
-        <div className="scenario-result"><span>Potential monthly breathing room</span><strong>{euro(simulation.saving)}</strong>
-          <p>{euro(simulation.annual)} over 12 months if repeated</p></div>
-        <div className="scenario-comparison"><div><span>Observed {category}</span><strong>{euro(simulation.baseline)}</strong></div>
-          <Icon name="arrow" /><div><span>With your change</span><strong>{euro(simulation.remaining)}</strong></div></div>
-        <p className="note">Baseline: {monthLabel(period)}. Other spending stays unchanged. A 12-month extrapolation is not a forecast of achieved savings.</p>
-        <Button variant="ghost" className="text-button" onPress={() => ask(`Reduce ${category} by ${reduction}%`)}><Icon name="sparkle" size={16} />Explain my scenario<Icon name="arrow" size={16} /></Button>
-      </Card>
-      <section className="goal-card"><span className="goal-icon"><Icon name="plan" size={32} /></span><p className="eyebrow">Give the possibility a purpose</p>
-        <h2>A weekend away?<br />A rainy-day cushion?</h2><p>Choose a target and see how this one change could contribute.</p>
-        <label className="field-label" htmlFor="goal">Your hypothetical target, EUR<input id="goal" type="number" min="1" max="1000000" step="1"
-          value={goal} onChange={event => setGoal(event.target.value)} /></label>
-        {goalMonths ? <div className="goal-estimate"><strong>{goalMonths}<span>months</span></strong><p>at {euro(simulation.saving)} per month from this scenario alone</p></div>
-          : <p className="goal-empty" role="status">{goalCents > 0 ? 'Increase the reduction or choose a category with observed spending to explore a timeline.' : 'Enter a positive target to see an estimate.'}</p>}
-        <p className="tiny">An illustrative target, not a recorded account or existing goal. Assumes you set the saving aside each month. No interest, fees, or returns included.</p>
-      </section></div>
-      <Card title="A glimpse ahead, not a promise" eyebrow="Three-month balance scenario"
-        action={<span className="soft-badge purple">Experimental baseline</span>}>
-        {prediction && <div className="forecast-headline"><div><span>Next-month central scenario</span><strong>{euro(prediction.points[0].central)}</strong></div>
-          <div><span>Sensitivity range</span><strong className="range-value">{euro(prediction.points[0].low, true)} — {euro(prediction.points[0].high, true)}</strong></div></div>}
-        <BalanceChart months={person.monthly} cutoff={period} prediction />
-        {prediction && <><div className="forecast-assumptions"><div><Icon name="explore" /><span>Trailing 3-month cash flow<strong>{euro(prediction.net)} / month</strong></span></div>
-          <div><Icon name="plan" /><span>Historical one-month error<strong>{euro(prediction.mae)} · {prediction.backtestCount} checks</strong></span></div>
-          <div><Icon name="info" /><span>Training period<strong>{monthLabel(prediction.window[0], true)} – {monthLabel(period, true)}</strong></span></div></div>
-          <details className="method-details"><summary>How this projection works</summary>
-            <p>We average the last three observed monthly net cash flows and add that amount to the selected month's observed balance for each future month. No observations after the selected month are used.</p>
-            <p>Each historical check predicts a month using only its preceding three months. The displayed error is mean absolute error. The range uses the larger of that error and the largest cash-flow deviation in the training window, widening linearly over time. It is a sensitivity band, not a calibrated confidence interval.</p>
-            <p>Average components: income {euro(prediction.income)}, consumption {euro(prediction.consumption)}, investment deposits {euro(prediction.deposits)}, withdrawals {euro(prediction.withdrawals)}, salary sweeps {euro(prediction.sweeps)}. Rounded component averages may differ from the net average by a few cents.</p>
-            <p>Transfers are assumed to repeat. We do not predict bill dates, unobserved obligations, or investment returns. Negative projected balances are shown, not hidden. This is not a safe-to-spend allowance or financial advice.</p>
-          </details></>}
-      </Card>
-      <MortgageCard person={person} month={month} ask={ask} />
+    {tab === 'payments' && <>
+      <div className="widget-grid"><Card title="Try a payment">
+        <p className="note">See how a payment would affect your cash. This is a simulation; no money is sent.</p>
+        <p className="note">Uses the observed balance at {monthLabel(month.month)}, the ending month chosen on Accounts or Spending.</p>
+        <form onSubmit={addPayment} className="payment-form">
+          <label>Demo recipient<input value={recipient} maxLength={60} onChange={event => setRecipient(event.target.value)}
+            placeholder="e.g. Shared dinner" required aria-invalid={!!paymentError} aria-describedby={paymentError ? 'payment-error' : undefined} /></label>
+          <label>Amount, EUR<input value={paymentInput} inputMode="decimal" onChange={event => setPaymentInput(event.target.value)}
+            placeholder="0.00" required aria-invalid={!!paymentError} aria-describedby={paymentError ? 'payment-error' : undefined} /></label>
+          {paymentError && <p id="payment-error" className="error" role="alert">{paymentError}</p>}
+          <Button type="submit" className="primary-button"><Icon name="payments" size={18} />Simulate payment</Button>
+        </form>
+      </Card><Card title="Payment impact">
+        <Money label="Total test payments" amount={paymentTotal} />
+        {!payments.length ? <p className="empty">Enter a payment to build your test list and see what would be left afterward.</p>
+          : <ul className="sandbox-payments">{payments.map(payment => <li key={payment.id}>
+            <div><strong>{payment.recipient}</strong><span>Simulation only · {euro(payment.amount)}</span></div>
+            <Button variant="ghost" isIconOnly aria-label={`Remove simulated payment to ${payment.recipient}`} onPress={() => {
+              setPayments(items => items.filter(item => item.id !== payment.id)); setNotice('Simulated payment removed.');
+            }}><Icon name="close" size={18} /></Button></li>)}</ul>}
+        {payments.length > 0 && <><div className="payment-impact" role="status" aria-live="polite">
+          <Money label="Cash left after your experiments" amount={balance} detail={contribution > 0
+            ? `Also includes your ${euro(contribution)} investment contribution` : 'After the test payments above'} /></div>
+          <Button variant="outline" onPress={() => {
+            setPayments([]); setPaymentError(null); setNotice('All test payments cleared.');
+          }}><Icon name="reset" size={16} />Clear test payments</Button></>}
+        <p className="note">Test payments also affect the Spending forecast. Switching person or month, or refreshing, clears them. No payment network is connected.</p>
+      </Card></div>
+      <details className="history-details"><summary>Recorded outgoing payments · {monthLabel(start, true)}–{monthLabel(month.month, true)}</summary>
+        <Transactions person={person} months={months} mode="payments" /></details>
     </>}
-    {tab === 'coach' && <Coach key={`${period}-${coachSession}`} person={person} month={month} initialQuestion={initialQuestion} />}
-    <footer className="page-footer"><span><Icon name="pocket" size={16} /> Made for a healthier relationship with money.</span>
-      <details><summary>Synthetic demo · data & limitations</summary><p>Fictional display names. {person.userId} · age {person.profile.age} · {person.coverage.transactionCount} transactions · {person.coverage.observedAccountCount} observed account(s).
-        Data coverage: {person.coverage.from} to {person.coverage.through}. Simulated today: {person.demoToday}. {person.limitations.join(' ')}
-        {person.hasSkippedRows && ' Warning: this person has skipped source rows.'} Full transaction records stay outside the hosted bundle.</p></details></footer>
+    {tab === 'investments' && <>
+      <Suspense fallback={null}><StockTickerLazy /></Suspense>
+      <div className="widget-grid"><Card title="Investment transfers">
+        <div className="chart-view-controls" role="group" aria-label="Investment visualization">
+          <Button variant="outline" aria-pressed={investmentView === 'calendar'} onPress={() => setInvestmentView('calendar')}>Heatmap</Button>
+          <Button variant="outline" aria-pressed={investmentView === 'chart'} onPress={() => setInvestmentView('chart')}>Monthly bars</Button>
+        </div>
+        {investmentView === 'calendar' ? <InvestmentHeatmap person={person} start={start} end={month.month} onSelect={onChooseMonth} />
+          : <Suspense fallback={<p role="status">Loading chart…</p>}><InvestmentChart months={person.monthly} start={start} cutoff={month.month} /></Suspense>}
+        <div className="comparison"><Money label="Deposits in selected months" amount={rangeTotals.deposits} />
+          <Money label="Withdrawals in selected months" amount={rangeTotals.withdrawals} /></div>
+        <details><summary>Transfers are not investment performance</summary>
+          <p className="note">These are transfers, not earnings or everyday spending. No holdings, portfolio value or investment performance are provided.
+            Salary sweeps in the selected months: {euro(rangeTotals.sweeps)}. Their destination is unknown; they are not confirmed investment deposits.</p></details>
+      </Card><Card title="Try setting money aside">
+        <div className="slider-label"><label htmlFor="contribution">One-time contribution</label><strong>{euro(contribution)}</strong></div>
+        <input id="contribution" type="range" min="0" max={Math.min(100000, Math.max(0, month.closingBalanceCents - paymentTotal))}
+          step="1" value={contribution} aria-valuetext={`${euro(contribution)} one-time contribution`}
+          onChange={event => setContribution(Number(event.target.value))} />
+        <div className="result" role="status" aria-live="polite"><span>Cash remaining after your contribution</span><strong>{euro(balance)}</strong>
+          <p>{euro(contribution)} set aside · no returns assumed</p></div>
+        {paymentTotal > 0 && <p className="note">Also accounts for {euro(paymentTotal)} in test payments.</p>}
+        <Button variant="outline" isDisabled={contribution === 0} onPress={() => {
+          setContribution(0); setNotice('Extra investment contribution reset.');
+        }}><Icon name="reset" size={16} />Reset contribution</Button>
+        <p className="note">Uses {monthLabel(month.month)}'s ending balance. Capped at €1,000 or remaining cash, whichever is lower. Not a recommended allocation. No investment order is placed.</p>
+      </Card></div>
+      <Card title="Recorded investment transfers"><Transactions person={person} months={months} mode="investments" /></Card>
+    </>}
+  </>;
+}
+
+function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onExpand, loading }: {
+  person: Person; tab: Tab; period: Period; onPeriodChange: (period: Period) => void;
+  messages: ChatMessage[]; onSend: (question: string) => void; onExpand: () => void; loading: boolean;
+}) {
+  const months = useMemo(() => person.monthly.slice(period.start, period.end + 1), [person, period.start, period.end]);
+  return <>
+    <h1 className="sr-only">{tabs.find(item => item.id === tab)!.label}</h1>
+    <div className="dashboard-layout">
+      <div className="dashboard-main">
+        <Workbench key={`${period.start}-${period.end}`} person={person} months={months} tab={tab} onChooseMonth={month => {
+          const index = person.monthly.findIndex(item => item.month === month);
+          if (index < 0) throw new Error('Unknown investment calendar month.');
+          onPeriodChange({ start: index, end: index });
+        }} />
+        <footer><details><summary>Synthetic demo · sources & limitations</summary><p className="note">Fictional display names. {person.userId} · age {person.profile.age}.
+          Data from {person.coverage.from} to {person.coverage.through}; {person.coverage.transactionCount} transactions.
+          Historical demo clock: {person.demoToday}. Experiments change only this session; switching person/month or refreshing resets them.
+          Compact monthly records load on demand from our extracted JSONs; full source records are not hosted.
+          {person.limitations.join(' ')} {person.hasSkippedRows && 'Warning: this person has skipped source rows.'}</p></details></footer>
+      </div>
+      <div className="dashboard-coach">
+        <CoachCard key={`${tab}-${period.start}-${period.end}`} messages={messages} onSend={onSend} onExpand={onExpand} loading={loading} />
+      </div>
+    </div>
   </>;
 }
 
@@ -293,9 +510,64 @@ export default function App() {
   const [person, setPerson] = useState<Person | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
-  const [tab, setTab] = useState<Tab>(currentTab);
-  const heading = useRef<HTMLDivElement>(null);
-  const selected = PEOPLE.find(person => person.id === userId)!;
+  const [tab, setTab] = useState<Page>(currentTab);
+  const [selection, setSelection] = useState<Period | null>(null);
+  const [periodPreview, setPeriodPreview] = useState<Period | null>(null);
+  const [rangeHidden, setRangeHidden] = useState(false);
+  const lastMonth = (person?.monthly.length ?? 1) - 1;
+  const period = selection ?? { start: Math.max(0, lastMonth - 1), end: lastMonth };
+  const displayedPeriod = periodPreview ?? period;
+  const [chats, setChats] = useState<Record<string, ChatThread>>({});
+  const [activeChat, setActiveChat] = useState<string | null>(null);
+  const [returnPage, setReturnPage] = useState<Tab>('accounts');
+  const [aiMode, setAiMode] = useState<'auto' | 'local'>('auto');
+  const [loadingChat, setLoadingChat] = useState<string | null>(null);
+  const isFinancePage = tab !== 'ai' && tab !== 'ai-history';
+  const chatKey = `${userId}:${period.start}:${period.end}:${tab}`;
+  const activeThread = activeChat && chats[activeChat]?.userId === userId ? chats[activeChat] : null;
+  const createThread = (): ChatThread => {
+    if (!person || person.userId !== userId || !isFinancePage) throw new Error('No finance context for this conversation.');
+    return {
+      id: chatKey, userId, title: `${tabs.find(item => item.id === tab)!.label} chat`,
+      period: `${monthLabel(person.monthly[period.start].month, true)} – ${monthLabel(person.monthly[period.end].month, true)}`,
+      endingMonth: person.monthly[period.end].month, messages: [],
+    };
+  };
+  const sendQuestion = (question: string, id: string, context?: ChatThread) => {
+    if (!person || person.userId !== userId) throw new Error('No selected person for this conversation.');
+    const thread = chats[id] ?? context;
+    if (!thread || thread.userId !== userId) throw new Error('Conversation does not belong to this person.');
+    const month = person.monthly.find(item => item.month === thread.endingMonth);
+    if (!month) throw new Error('Conversation period is unavailable.');
+    const currentTab = thread.id.split(':')[3] ?? 'accounts';
+    setLoadingChat(id);
+    const webContextPromise = aiMode === 'auto'
+      ? import('./agent').then(m => m.searchWebContext(question, currentTab)).catch(() => '')
+      : Promise.resolve('');
+    webContextPromise.then(webContext =>
+      answerQuestionExtended(person, month, question, {
+        enableLiveAI: aiMode === 'auto',
+        currentTab,
+        webContext,
+      })
+    ).then(answer => {
+      const message = { question, answer };
+      setChats(items => ({ ...items, [id]: { ...thread, messages: [...(items[id]?.messages ?? thread.messages), message] } }));
+    }).finally(() => setLoadingChat(null));
+  };
+  const main = useRef<HTMLElement>(null);
+  const appHeader = useRef<HTMLElement>(null);
+  const workspace = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const bar = appHeader.current;
+    const container = workspace.current;
+    if (!bar || !container) return;
+    const observer = new ResizeObserver(([entry]) => {
+      container.style.setProperty('--app-bar-height', `${entry.borderBoxSize[0].blockSize}px`);
+    });
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     const controller = new AbortController();
     setPerson(null); setError(null);
@@ -310,46 +582,90 @@ export default function App() {
     return () => controller.abort();
   }, [userId, retry]);
   useEffect(() => {
-    const changed = () => setTab(currentTab());
+    const changed = () => { if (window.location.hash !== '#main') setTab(currentTab()); };
     window.addEventListener('hashchange', changed);
     return () => window.removeEventListener('hashchange', changed);
   }, []);
-  const navigate = (value: Tab) => {
-    setTab(value); window.location.hash = value;
-    window.scrollTo({ top: 0, behavior: 'instant' });
-    heading.current?.focus({ preventScroll: true });
+  useEffect(() => {
+    const onScroll = () => {
+      if (document.activeElement?.closest('#month-subbar')) return;
+      if (window.scrollY > 100) setRangeHidden(true);
+      else if (window.scrollY < 16) setRangeHidden(false);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+  const navigate = (value: Page) => {
+    setTab(value); window.location.hash = value === 'ai-history' ? 'ai/history' : value;
+    window.scrollTo({ top: 0, behavior: 'instant' }); main.current?.focus({ preventScroll: true });
   };
   const nav = (mobile = false) => <nav aria-label={mobile ? 'Mobile navigation' : 'Main navigation'}>
-    {tabs.map(item => <Button key={item.id} variant="ghost" className={`nav-item ${tab === item.id ? 'active' : ''}`}
-      aria-current={tab === item.id ? 'page' : undefined} onPress={() => navigate(item.id)}>
-      <Icon name={item.icon} size={mobile ? 21 : 19} /><span>{item.label}</span>
-      {!mobile && tab === item.id && <span className="nav-active-dot" />}
-    </Button>)}</nav>;
-  return <div className="app-shell">
-    <a className="skip-link" href="#main">Skip to content</a>
-    <aside className="sidebar"><a className="brand" href="#overview" onClick={() => navigate('overview')}>
-      <span className="brand-icon"><Icon name="pocket" size={25} /></span>pocket<span className="brand-period">.</span></a>
-      <p className="brand-caption">A little clarity goes a long way.</p>
-      <div className="nav-label">YOUR SPACE</div>{nav()}
-      <div className="sidebar-note"><div className="sidebar-note-icon"><Icon name="leaf" size={25} /></div>
-        <h3>Progress, not perfection.</h3><p>You don't have to change everything. Start with understanding.</p>
-        <Button variant="ghost" className="text-button" size="sm" onPress={() => navigate('plan')}>Find your next step<Icon name="arrow" size={15} /></Button></div>
-      <div className="sidebar-bottom"><span className="demo-pill"><span className="live-dot" />Junction 2026 demo</span><p>Inspired by the S-Pankki challenge<br />Independent prototype · synthetic data</p></div>
+    {tabs.map(item => <a key={item.id} href={`#${item.id}`} className={`nav-item ${tab === item.id ? 'active' : ''}`}
+      aria-current={tab === item.id ? 'page' : undefined} onClick={event => { event.preventDefault(); navigate(item.id); }}>
+      <Icon name={item.icon} size={21} /><span>{item.label}</span></a>)}</nav>;
+  return <div className="app-shell"><a className="skip-link" href="#main">Skip to content</a>
+    <aside className="sidebar"><a className="brand" href="#accounts" aria-label="Pocket home" onClick={event => {
+      event.preventDefault(); navigate('accounts');
+    }}><span className="brand-icon"><Icon name="pocket" size={24} /></span>pocket.</a>
+      <p className="brand-caption">Your money. Made clearer.</p>{nav()}
+      <p className="sidebar-disclosure">S-Pankki challenge<br />Independent synthetic prototype</p>
     </aside>
-    <div className="workspace"><div className="topbar">
-      <a className="mobile-brand brand" href="#overview" onClick={() => navigate('overview')}><span className="brand-icon"><Icon name="pocket" size={22} /></span>pocket.</a>
-      <div className="breadcrumb">Your space <Icon name="chevron" size={14} /><strong>{tabs.find(item => item.id === tab)?.label}</strong></div>
-      <div className="topbar-right"><span className="historical-tag"><span className="live-dot" />Historical demo · Oct 2026</span>
-        <label className="person-switcher"><span className={`avatar ${selected.color}`}>{selected.initials}</span>
-          <span className="person-label"><small>Demo person</small><select aria-label="Choose demo person" value={userId} onChange={event => setUserId(event.target.value)}>
-            {PEOPLE.map(person => <option key={person.id} value={person.id}>{person.name} · {person.description}</option>)}</select></span></label>
+    <div ref={workspace} className="workspace"><header ref={appHeader} className="app-header"><div className="topbar">
+      <a className="brand header-brand" href="#accounts" aria-label="Pocket home" onClick={event => {
+        event.preventDefault(); navigate('accounts');
+      }}><Icon name="pocket" size={22} />pocket.</a>
+      {isFinancePage && tab !== 'payments' && person?.userId === userId && <Button variant="ghost" className="period-summary"
+          aria-label={rangeHidden ? 'Show month range' : 'Hide month range'} aria-expanded={!rangeHidden} aria-controls="month-subbar"
+          onPress={() => setRangeHidden(value => !value)}>
+          <span>{monthLabel(person.monthly[displayedPeriod.start].month, true, '2-digit')} – {monthLabel(person.monthly[displayedPeriod.end].month, true, '2-digit')}</span>
+      </Button>}
+      <div className="header-actions">
+        <span className="historical-tag">Synthetic demo</span>
+        <Dropdown>
+          <Dropdown.Trigger className="ai-mode-trigger" aria-label={`AI mode: ${aiMode === 'auto' ? 'Live AI' : 'Local only'}`}>
+            <span className={`ai-mode-badge ${aiMode}`}>{aiMode === 'auto' ? '✦ Live AI' : '⊙ Local'}</span>
+            <Icon name="dropdown" size={14} />
+          </Dropdown.Trigger>
+          <Dropdown.Popover className="person-menu" placement="bottom end">
+            <Dropdown.Menu aria-label="AI mode" selectionMode="single" selectedKeys={new Set([aiMode])}
+              onAction={key => { if (key === 'auto' || key === 'local') setAiMode(key); }}>
+              <Dropdown.Item key="auto" id="auto" textValue="Live AI (Nemotron → Gemma)">
+                <div className="person-menu-copy"><strong>Live AI</strong><span>Nemotron → Gemma fallback</span></div>
+                {aiMode === 'auto' && <Icon name="check" size={16} />}
+              </Dropdown.Item>
+              <Dropdown.Item key="local" id="local" textValue="Local rules only">
+                <div className="person-menu-copy"><strong>Local only</strong><span>Rule-based, no API calls</span></div>
+                {aiMode === 'local' && <Icon name="check" size={16} />}
+              </Dropdown.Item>
+            </Dropdown.Menu>
+          </Dropdown.Popover>
+        </Dropdown>
+        <PersonMenu userId={userId} onSelect={id => { setSelection(null); setPeriodPreview(null); setRangeHidden(false); setUserId(id); }} />
       </div>
-    </div><main id="main" ref={heading} tabIndex={-1}>
-      {person?.userId === userId ? <Dashboard key={userId} person={person} tab={tab} navigate={navigate} />
-        : error ? <div className="load-state error-state" role="alert"><Icon name="info" size={40} /><h1>We couldn't load this snapshot.</h1>
-          <p>{error}</p><Button onPress={() => setRetry(value => value + 1)}>Try again</Button></div>
-          : <div className="load-state" role="status"><span className="loading-orb"><Icon name="pocket" size={32} /></span>
-            <h2>A little clarity is on its way.</h2><p>Loading {selected.name}'s financial snapshot…</p></div>}
+    </div></header>
+    {isFinancePage && tab !== 'payments' && person?.userId === userId && <div id="month-subbar" className="range-subbar" hidden={rangeHidden}>
+      <PeriodSlider months={person.monthly} value={displayedPeriod} onPreview={setPeriodPreview} onChange={value => {
+        setPeriodPreview(null); setSelection(value);
+      }} />
+    </div>}
+    <main id="main" ref={main} tabIndex={-1}>{person?.userId === userId
+      ? isFinancePage ? <Dashboard key={userId} person={person} tab={tab} period={period} onPeriodChange={setSelection}
+        messages={chats[chatKey]?.messages ?? []} onSend={question => sendQuestion(question, chatKey, createThread())}
+        loading={loadingChat === chatKey}
+        onExpand={() => {
+          const thread = chats[chatKey] ?? createThread();
+          setChats(items => ({ ...items, [chatKey]: items[chatKey] ?? thread }));
+          setActiveChat(chatKey); setReturnPage(tab); navigate('ai');
+        }} />
+        : <CoachPage thread={activeThread} threads={Object.values(chats).filter(thread => thread.userId === userId)}
+          historyView={tab === 'ai-history'} loading={activeChat ? loadingChat === activeChat : false} onSend={question => {
+            if (!activeThread) throw new Error('No conversation selected.');
+            sendQuestion(question, activeThread.id);
+          }} onChoose={id => { setActiveChat(id); navigate('ai'); }}
+          onHistory={() => navigate('ai-history')} onBack={() => navigate(returnPage)} />
+      : error ? <div className="load-state" role="alert"><h1>Snapshot unavailable</h1><p>{error}</p>
+        <Button onPress={() => setRetry(value => value + 1)}>Try again</Button></div>
+        : <div className="load-state" role="status">Loading {PEOPLE.find(item => item.id === userId)!.name}'s snapshot…</div>}
     </main></div><div className="mobile-nav">{nav(true)}</div>
   </div>;
 }

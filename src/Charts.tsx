@@ -1,11 +1,13 @@
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart,
-  Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Line, Pie, PieChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
+import { useState } from 'react';
+import { Button } from '@heroui/react';
 import type { Month } from './data';
-import { euro, forecast, monthLabel, palette } from './finance';
+import { averageSpending, euro, forecast, monthLabel, palette, spendingScenario } from './finance';
 
-const tick = { fill: '#7c8781', fontSize: 11, fontFamily: 'inherit' };
+const tick = { fill: '#53616f', fontSize: 11, fontFamily: 'inherit' };
 const grid = { stroke: '#edf0eb', strokeDasharray: '3 5', vertical: false };
 const tooltipStyle = { borderRadius: 14, border: '1px solid #e5ebe3', boxShadow: '0 8px 30px #173f3510', fontSize: 12 };
 const moneyTick = (value: number) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value / 100);
@@ -16,23 +18,29 @@ const formatTooltip = (value: unknown) => {
   return 'Not available';
 };
 
-export function BalanceChart({ months, cutoff, prediction = false }: { months: Month[]; cutoff: string; prediction?: boolean }) {
+export function BalanceChart({ months, cutoff, start, prediction = false, monthlySaving = 0, oneTimeOutflow = 0 }: {
+  months: Month[]; cutoff: string; start?: string; prediction?: boolean; monthlySaving?: number; oneTimeOutflow?: number;
+}) {
+  const [showExpenses, setShowExpenses] = useState(false);
   const history = months.filter(month => month.month <= cutoff);
-  const model = prediction && history.length >= 4 ? forecast(months, cutoff) : null;
+  const visible = start ? history.filter(month => month.month >= start) : history.slice(-6);
+  const model = prediction && history.length >= 4 ? forecast(months, cutoff, monthlySaving, oneTimeOutflow) : null;
   const anchor = history.at(-1)!;
   const data = [
-    ...history.slice(-6).map(month => ({
+    ...visible.map(month => ({
       month: month.month,
       observed: month.closingBalanceCents,
-      predicted: model && month.month === cutoff ? month.closingBalanceCents : undefined,
-      range: model && month.month === cutoff ? [month.closingBalanceCents, month.closingBalanceCents] : undefined,
+      expenses: month.consumptionCents,
+      predicted: model && month.month === cutoff ? month.closingBalanceCents - oneTimeOutflow : undefined,
+      range: model && month.month === cutoff ? [month.closingBalanceCents - oneTimeOutflow, month.closingBalanceCents - oneTimeOutflow] : undefined,
     })),
     ...(model?.points.map(point => ({
-      month: point.month, observed: undefined, predicted: point.central, range: [point.low, point.high],
+      month: point.month, observed: undefined, expenses: undefined, predicted: point.central, range: [point.low, point.high],
     })) ?? []),
   ];
   return <>
-    <div className="chart balance-chart" role="img" aria-label={`Observed month-end account balance up to ${monthLabel(cutoff)}${model ? ', followed by a three-month cash-flow scenario with sensitivity range' : ''}. Exact values in the table below.`}>
+    <label className="expense-toggle"><input type="checkbox" checked={showExpenses} onChange={event => setShowExpenses(event.target.checked)} />Show expenses</label>
+    <div className="chart balance-chart" role="img" aria-label={`Observed month-end account balance up to ${monthLabel(cutoff)}${model ? ', followed by a three-month cash-flow scenario with sensitivity range' : ''}${showExpenses ? '. Recorded consumption is shown as muted red bars on the right-hand EUR scale; transfers are excluded' : ''}. Exact values are available in tooltips and the accessible table.`}>
       <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <ComposedChart data={data} margin={{ top: 18, right: 6, left: 0, bottom: 0 }}>
           <defs><linearGradient id="balanceFill" x1="0" y1="0" x2="0" y2="1">
@@ -41,59 +49,168 @@ export function BalanceChart({ months, cutoff, prediction = false }: { months: M
           </linearGradient></defs>
           <CartesianGrid {...grid} />
           <XAxis dataKey="month" tick={tick} tickFormatter={labelTick} axisLine={false} tickLine={false} dy={8} minTickGap={14} />
-          <YAxis tick={tick} tickFormatter={moneyTick} axisLine={false} tickLine={false} width={44} domain={['auto', 'auto']} />
+          <YAxis yAxisId="balance" tick={tick} tickFormatter={moneyTick} axisLine={false} tickLine={false} width={44} domain={['auto', 'auto']} />
+          {showExpenses && <YAxis yAxisId="expenses" orientation="right" tick={{ ...tick, fill: '#995b56' }} tickFormatter={moneyTick}
+            axisLine={false} tickLine={false} width={42} domain={[0, 'auto']} />}
           <Tooltip formatter={formatTooltip} labelFormatter={label => monthLabel(String(label))}
             contentStyle={tooltipStyle} cursor={{ stroke: '#bfd1c1', strokeDasharray: '3 3' }} />
-          <Area type="monotone" dataKey="observed" name="Observed balance" stroke="#397358" strokeWidth={2.8} fill="url(#balanceFill)" isAnimationActive={false} />
-          {model && <Area type="linear" dataKey="range" name="Sensitivity range" stroke="none" fill="#c7b9e4" fillOpacity={0.27} isAnimationActive={false} />}
-          {model && <Line type="linear" dataKey="predicted" name="Baseline scenario" stroke="#a18ac5" strokeWidth={2.5} strokeDasharray="5 5" dot={{ r: 3, fill: '#a18ac5' }} isAnimationActive={false} />}
+          {showExpenses && <Bar yAxisId="expenses" dataKey="expenses" name="Recorded consumption" fill="#ad6460" fillOpacity={0.6}
+            maxBarSize={20} radius={[4, 4, 0, 0]} isAnimationActive={false} />}
+          <Area yAxisId="balance" type="monotone" dataKey="observed" name="Observed balance" stroke="#397358" strokeWidth={2.8} fill="url(#balanceFill)"
+            dot={visible.length === 1 ? { r: 4, fill: '#397358' } : false} isAnimationActive={false} />
+          {model && <Area yAxisId="balance" type="linear" dataKey="range" name="Sensitivity range" stroke="none" fill="#305dc0" fillOpacity={0.13} isAnimationActive={false} />}
+          {model && <Line yAxisId="balance" type="linear" dataKey="predicted" name="Your scenario" stroke="#305dc0" strokeWidth={2.5} strokeDasharray="5 5" dot={{ r: 3, fill: '#305dc0' }} isAnimationActive={false} />}
         </ComposedChart>
       </ResponsiveContainer>
     </div>
     <div className="chart-legend"><span><i style={{ background: '#397358' }} />Observed balance</span>
-      {model && <span><i style={{ background: '#c7b9e4' }} />Estimated · not guaranteed</span>}
+      {model && <span><i style={{ background: '#305dc0' }} />Your scenario · not guaranteed</span>}
+      {showExpenses && <span><i style={{ background: '#ad6460' }} />Expenses · right scale</span>}
       <span className="legend-unit">EUR</span>
     </div>
+    {showExpenses && <p className="note">Expenses = recorded consumption, excluding investment transfers and salary sweeps. Right-hand scale is EUR per month, not an account balance. No future expense amounts are predicted.</p>}
     {prediction && !model && <p className="note">Choose a later month: at least four observed months are needed for a baseline and backtest.</p>}
-    <details className="data-details"><summary>View exact balances</summary>
+    <div className="sr-only">
       <div className="table-scroll"><table><caption>Historical observations and hypothetical projections, EUR</caption>
-        <thead><tr><th>Month</th><th>Observed</th><th>Scenario</th><th>Range</th></tr></thead>
-        <tbody>{history.slice(-6).map(month => <tr key={month.month}><td>{monthLabel(month.month, true)}</td>
-          <td>{euro(month.closingBalanceCents)}</td><td>—</td><td>—</td></tr>)}
+        <thead><tr><th>Month</th><th>Observed</th><th>Scenario</th><th>Range</th>{showExpenses && <th>Recorded expenses</th>}</tr></thead>
+        <tbody>{visible.map(month => <tr key={month.month}><td>{monthLabel(month.month, true)}</td>
+          <td>{euro(month.closingBalanceCents)}</td><td>—</td><td>—</td>{showExpenses && <td>{euro(month.consumptionCents)}</td>}</tr>)}
           {model?.points.map(point => <tr key={point.month}><td>{monthLabel(point.month, true)}</td><td>—</td>
-            <td>{euro(point.central)}</td><td>{euro(point.low)} – {euro(point.high)}</td></tr>)}</tbody>
+            <td>{euro(point.central)}</td><td>{euro(point.low)} – {euro(point.high)}</td>{showExpenses && <td>—</td>}</tr>)}</tbody>
       </table></div>
       <p className="note">Latest historical observation: {anchor.balanceObservedAt.replace('T', ' ')} (timezone unspecified).</p>
-    </details>
+    </div>
   </>;
 }
 
-export function SpendingChart({ month, selected, onSelect }: { month: Month; selected: string; onSelect: (category: string) => void }) {
+export function SpendingChart({ month, selected, onSelect, compact = false, savings = {}, averaged = false }: {
+  month: Month; selected: string; onSelect: (category: string) => void; compact?: boolean; savings?: Record<string, number>; averaged?: boolean;
+}) {
   const categories = Object.entries(month.categorySpendingCents)
-    .sort((a, b) => b[1] - a[1]).map(([name, value], index) => ({ name, value, color: palette[index % palette.length] }));
+    .sort((a, b) => (b[1] + (savings[b[0]] ?? 0)) - (a[1] + (savings[a[0]] ?? 0)))
+    .map(([name, value], index) => ({ name, value, color: palette[index % palette.length] }));
+  const categoryButton = (category: typeof categories[number]) => <button key={category.name}
+    className={`category-button ${selected === category.name ? 'selected' : ''}`}
+    onClick={() => onSelect(category.name)} aria-pressed={selected === category.name}>
+    <i style={{ background: category.color }} /><span>{category.name}</span>
+    <div className="category-values"><strong>{euro(category.value)}</strong>
+      {(savings[category.name] ?? 0) > 0 && <strong className="category-saving">
+        <span className="sr-only">Reduced by </span>−{euro(savings[category.name])}</strong>}</div>
+  </button>;
   return <div className="spending-layout">
-    <div className="donut-wrap" role="img" aria-label={`Consumption ${euro(month.consumptionCents)}. Category amounts in the adjacent buttons.`}>
+    <div className="donut-wrap" role="img" aria-label={`${averaged ? 'Average monthly consumption' : 'Consumption'} ${euro(month.consumptionCents)}. Category amounts in the adjacent buttons.`}>
       <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <PieChart>
           <Pie data={categories} dataKey="value" nameKey="name" innerRadius="73%" outerRadius="96%" paddingAngle={3}
             cornerRadius={5} stroke="none" isAnimationActive={false}>
             {categories.map(category => <Cell key={category.name} fill={category.color}
-              opacity={selected && selected !== category.name ? 0.35 : 1} />)}
+              stroke={selected === category.name ? '#202c35' : 'none'} strokeWidth={selected === category.name ? 2 : 0} />)}
           </Pie>
           <Tooltip formatter={formatTooltip} contentStyle={tooltipStyle} />
         </PieChart>
       </ResponsiveContainer>
-      <div className="donut-label"><span>Total spending</span><strong>{euro(month.consumptionCents, true)}</strong><small>Consumption only</small></div>
+      <div className="donut-label"><span>{averaged ? 'Monthly average' : 'Total spending'}</span><strong>{euro(month.consumptionCents, true)}</strong><small>Consumption only</small></div>
     </div>
     <div className="category-legend">
-      {categories.slice(0, 5).map(category => <button key={category.name}
-        className={`category-button ${selected === category.name ? 'selected' : ''}`}
-        onClick={() => onSelect(category.name)} aria-pressed={selected === category.name}>
-        <i style={{ background: category.color }} /><span>{category.name}</span><strong>{euro(category.value, true)}</strong>
-      </button>)}
-      {categories.length > 5 && <p className="note">+ {categories.length - 5} categories in Explore</p>}
+      {!compact && categories.slice(0, 5).map(categoryButton)}
+      {!compact && categories.length > 5 && <p className="note">All {categories.length} categories in the selector</p>}
+      {compact && <>
+        {categories.filter(category => (savings[category.name] ?? 0) > 0).map(categoryButton)}
+        <details><summary>All category amounts</summary>{categories.map(categoryButton)}</details>
+      </>}
     </div>
   </div>;
+}
+
+export function InvestmentChart({ months, cutoff, start }: { months: Month[]; cutoff: string; start?: string }) {
+  const history = months.filter(month => month.month <= cutoff);
+  const data = start ? history.filter(month => month.month >= start) : history.slice(-6);
+  const hasTransfers = data.some(month => month.investmentDepositsCents || month.investmentWithdrawalsCents);
+  return <>
+    {hasTransfers ? <div className="chart" role="img" aria-label="Investment deposits and withdrawals in the selected months. These are transfers, not investment returns. Exact amounts below.">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        <BarChart data={data} margin={{ top: 12, right: 0, left: 0, bottom: 0 }} barGap={4}>
+          <CartesianGrid {...grid} />
+          <XAxis dataKey="month" tick={tick} tickFormatter={labelTick} axisLine={false} tickLine={false} dy={8} />
+          <YAxis tick={tick} tickFormatter={moneyTick} axisLine={false} tickLine={false} width={42} />
+          <Tooltip formatter={formatTooltip} labelFormatter={label => monthLabel(String(label))} contentStyle={tooltipStyle} />
+          <Bar dataKey="investmentDepositsCents" name="Deposits" fill="#176343" radius={[4, 4, 0, 0]} maxBarSize={24} isAnimationActive={false} />
+          <Bar dataKey="investmentWithdrawalsCents" name="Withdrawals" fill="#305dc0" radius={[4, 4, 0, 0]} maxBarSize={24} isAnimationActive={false} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div> : <p className="empty">No investment transfers observed in these months. This does not mean you have no investments.</p>}
+    {hasTransfers && <div className="chart-legend"><span><i style={{ background: '#176343' }} />Deposits</span>
+      <span><i style={{ background: '#305dc0' }} />Withdrawals</span><span className="legend-unit">EUR</span></div>}
+    <details className="data-details"><summary>View exact transfer amounts</summary>
+      <div className="table-scroll"><table><caption>Observed investment transfers, not returns</caption>
+        <thead><tr><th>Month</th><th>Deposits</th><th>Withdrawals</th></tr></thead>
+        <tbody>{data.map(month => <tr key={month.month}><td>{monthLabel(month.month, true)}</td>
+          <td>{euro(month.investmentDepositsCents)}</td><td>{euro(month.investmentWithdrawalsCents)}</td></tr>)}</tbody>
+      </table></div></details>
+  </>;
+}
+
+export function SpendingInsights({ months, reductions, selected }: {
+  months: Month[]; reductions: Record<string, number>; selected: string;
+}) {
+  const [view, setView] = useState<'trend' | 'radar'>('trend');
+  const data = months.map(month => {
+    const adjusted = spendingScenario(month, reductions).month;
+    return { month: month.month, recorded: month.consumptionCents, adjusted: adjusted.consumptionCents,
+      category: adjusted.categorySpendingCents[selected] ?? 0 };
+  });
+  const baseline = { ...months.at(-1)!, ...averageSpending(months) };
+  const adjusted = spendingScenario(baseline, reductions).month;
+  const profile = Object.entries(baseline.categorySpendingCents)
+    .map(([category, recorded]) => ({ category, recorded, adjusted: adjusted.categorySpendingCents[category] }));
+  return <>
+    <div className="chart-view-controls" role="group" aria-label="Spending visualization">
+      <Button variant="outline" aria-pressed={view === 'trend'} onPress={() => setView('trend')}>Area trend</Button>
+      <Button variant="outline" aria-pressed={view === 'radar'} onPress={() => setView('radar')}>Radar profile</Button>
+    </div>
+    <div className="chart" role="img" aria-label={view === 'trend'
+      ? `Recorded and adjusted total spending in the selected months, with adjusted ${selected} spending. Exact values below.`
+      : 'Average monthly category spending: recorded versus with your reductions. Exact values below.'}>
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+        {view === 'trend' ? <ComposedChart data={data} margin={{ top: 16, right: 8, left: 0, bottom: 0 }}>
+          <defs><linearGradient id="spendingRecorded" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#305dc0" stopOpacity={0.22} /><stop offset="100%" stopColor="#305dc0" stopOpacity={0.01} />
+          </linearGradient><linearGradient id="spendingAdjusted" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#176343" stopOpacity={0.3} /><stop offset="100%" stopColor="#176343" stopOpacity={0.01} />
+          </linearGradient></defs>
+          <CartesianGrid {...grid} />
+          <XAxis dataKey="month" tick={tick} tickFormatter={labelTick} axisLine={false} tickLine={false} minTickGap={20} />
+          <YAxis tick={tick} tickFormatter={moneyTick} axisLine={false} tickLine={false} width={44} />
+          <Tooltip formatter={formatTooltip} labelFormatter={label => monthLabel(String(label))} contentStyle={tooltipStyle} />
+          <Area type="monotone" dataKey="recorded" name="Recorded total" stroke="#305dc0" fill="url(#spendingRecorded)" strokeWidth={2}
+            dot={data.length === 1 ? { r: 4 } : false} isAnimationActive={false} />
+          <Area type="monotone" dataKey="adjusted" name="With your reductions" stroke="#176343" fill="url(#spendingAdjusted)" strokeWidth={2}
+            dot={data.length === 1 ? { r: 4 } : false} isAnimationActive={false} />
+          <Line type="monotone" dataKey="category" name={`${selected} with reductions`} stroke="#a04b14" strokeDasharray="4 4" dot={{ r: 3 }} isAnimationActive={false} />
+        </ComposedChart> : <RadarChart data={profile} outerRadius="62%" margin={{ top: 16, bottom: 16, left: 24, right: 24 }}>
+          <PolarGrid stroke="#dce2e8" />
+          <PolarAngleAxis dataKey="category" tick={{ ...tick, fontSize: 10 }} tickFormatter={name => String(name).length > 12 ? `${String(name).slice(0, 10)}…` : String(name)} />
+          <PolarRadiusAxis tick={false} axisLine={false} />
+          <Radar name="Recorded average" dataKey="recorded" stroke="#305dc0" fill="#305dc0" fillOpacity={0.12} isAnimationActive={false} />
+          <Radar name="With your reductions" dataKey="adjusted" stroke="#176343" fill="#176343" fillOpacity={0.2} isAnimationActive={false} />
+          <Tooltip formatter={formatTooltip} contentStyle={tooltipStyle} />
+        </RadarChart>}
+      </ResponsiveContainer>
+    </div>
+    <div className="chart-legend"><span><i style={{ background: '#305dc0' }} />Recorded{view === 'radar' ? ' monthly average' : ' total'}</span>
+      <span><i style={{ background: '#176343' }} />With reductions</span>
+      {view === 'trend' && <span><i style={{ background: '#a04b14' }} />{selected} with reductions</span>}</div>
+    <p className="note">{view === 'trend' ? 'Your percentages are applied separately to each historical month. Change the category above to inspect its line.'
+      : 'Each spoke is a category in EUR per month, not a spending score. Larger shapes mean higher spending, not better performance.'}</p>
+    <details className="data-details"><summary>View exact spending insights</summary>
+      <div className="table-scroll"><table><caption>{view === 'trend' ? 'Monthly consumption and hypothetical reductions, EUR' : 'Average monthly categories, EUR'}</caption>
+        <thead>{view === 'trend' ? <tr><th>Month</th><th>Recorded total</th><th>With reductions</th><th>{selected} with reductions</th></tr>
+          : <tr><th>Category</th><th>Recorded average</th><th>With reductions</th></tr>}</thead>
+        <tbody>{view === 'trend' ? data.map(row => <tr key={row.month}><td>{monthLabel(row.month, true)}</td>
+          <td>{euro(row.recorded)}</td><td>{euro(row.adjusted)}</td><td>{euro(row.category)}</td></tr>)
+          : profile.map(row => <tr key={row.category}><td>{row.category}</td><td>{euro(row.recorded)}</td><td>{euro(row.adjusted)}</td></tr>)}</tbody>
+      </table></div></details>
+  </>;
 }
 
 export function CashFlowChart({ months, cutoff }: { months: Month[]; cutoff: string }) {

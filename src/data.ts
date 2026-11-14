@@ -94,6 +94,59 @@ export function isPerson(value: unknown): value is Person {
 
 const cache = new Map<string, Person>();
 
+export interface Transaction {
+  id: string;
+  timestamp: string;
+  category: string;
+  type: string;
+  amountCents: number;
+  balanceAfterCents: number;
+}
+
+export interface TransactionPage {
+  schemaVersion: 1;
+  synthetic: true;
+  userId: string;
+  month: string;
+  transactions: Transaction[];
+}
+
+export function isTransactionPage(value: unknown): value is TransactionPage {
+  if (!record(value) || value.schemaVersion !== 1 || value.synthetic !== true
+    || typeof value.userId !== 'string' || typeof value.month !== 'string'
+    || !/^\d{4}-(0[1-9]|1[0-2])$/.test(value.month) || !Array.isArray(value.transactions)) return false;
+  const month = value.month;
+  return value.transactions.every((row, index, rows) => record(row)
+    && typeof row.id === 'string' && typeof row.timestamp === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(row.timestamp)
+    && row.timestamp.slice(0, 7) === month
+    && typeof row.category === 'string' && typeof row.type === 'string'
+    && cents(row.amountCents) && cents(row.balanceAfterCents)
+    && (index === 0 || rows[index - 1].timestamp > row.timestamp))
+    && new Set(value.transactions.map(row => row.id)).size === value.transactions.length;
+}
+
+const transactionCache = new Map<string, TransactionPage>();
+
+export async function loadTransactions(id: string, month: Month, signal: AbortSignal): Promise<TransactionPage> {
+  if (!PEOPLE.some(person => person.id === id) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month.month)) {
+    throw new Error('Unknown demo person or transaction month.');
+  }
+  const key = `${id}/${month.month}`;
+  const cached = transactionCache.get(key);
+  if (cached) return cached;
+  const response = await fetch(`${import.meta.env.BASE_URL}demo/transactions/${key}.json`, { signal });
+  if (!response.ok) throw new Error(`Could not load transactions (${response.status}). Please try again.`);
+  const value: unknown = await response.json();
+  if (!isTransactionPage(value) || value.userId !== id || value.month !== month.month
+    || value.transactions.length !== month.transactionCount
+    || value.transactions.reduce((sum, row) => sum + row.amountCents, 0) !== month.netCashFlowCents) {
+    throw new Error('The transaction page does not match this snapshot. Regenerate it with npm run data.');
+  }
+  transactionCache.set(key, value);
+  return value;
+}
+
 export async function loadPerson(id: string, signal: AbortSignal): Promise<Person> {
   if (!PEOPLE.some(person => person.id === id)) throw new Error('Unknown demo person.');
   const cached = cache.get(id);

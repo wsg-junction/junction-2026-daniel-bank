@@ -7,8 +7,8 @@ export const euro = (cents: number, compact = false) =>
     minimumFractionDigits: compact ? 0 : 2,
   }).format(cents / 100);
 
-export function monthLabel(month: string, short = false) {
-  return new Intl.DateTimeFormat('en-GB', { month: short ? 'short' : 'long', year: 'numeric', timeZone: 'UTC' })
+export function monthLabel(month: string, short = false, year: 'numeric' | '2-digit' = 'numeric') {
+  return new Intl.DateTimeFormat('en-GB', { month: short ? 'short' : 'long', year, timeZone: 'UTC' })
     .format(new Date(`${month}-01T12:00:00Z`));
 }
 
@@ -17,7 +17,7 @@ export function nextMonth(month: string, offset: number) {
   return new Date(Date.UTC(year, number - 1 + offset, 1)).toISOString().slice(0, 7);
 }
 
-export const palette = ['#326e56', '#9cbf89', '#c7b9e4', '#e8b58e', '#e2cd79', '#8eacb6', '#c9cfcb', '#a8a19a'];
+export const palette = ['#176343', '#305dc0', '#a04b14', '#7445a1', '#8a6500', '#15778a', '#b23852', '#58636d'];
 export type Basket = 'regular' | 'irregular' | 'everyday' | 'unclassified';
 export type Overrides = Record<string, Basket>;
 export const basketLabels: Record<Basket, string> = {
@@ -54,9 +54,55 @@ export function scenario(month: Month, category: string, reduction: number) {
   return { baseline, saving, remaining: baseline - saving, annual: saving * 12 };
 }
 
+export function spendingScenario(month: Month, reductions: Record<string, number>) {
+  const categorySpendingCents = { ...month.categorySpendingCents };
+  const savings: Record<string, number> = {};
+  for (const [category, reduction] of Object.entries(reductions)) {
+    const result = scenario(month, category, reduction);
+    categorySpendingCents[category] = result.remaining;
+    savings[category] = result.saving;
+  }
+  const saving = Object.values(savings).reduce((sum, amount) => sum + amount, 0);
+  return {
+    saving, savings,
+    month: { ...month, categorySpendingCents, consumptionCents: month.consumptionCents - saving },
+  };
+}
+
+export function averageSpending(months: Month[]) {
+  if (!months.length) throw new Error('A spending average requires at least one observed month.');
+  const categories = [...new Set(months.flatMap(month => Object.keys(month.categorySpendingCents)))];
+  const categorySpendingCents = Object.fromEntries(categories.map(category => [
+    category, Math.round(months.reduce((sum, month) => sum + (month.categorySpendingCents[category] ?? 0), 0) / months.length),
+  ]));
+  return {
+    categorySpendingCents,
+    consumptionCents: Object.values(categorySpendingCents).reduce((sum, value) => sum + value, 0),
+  };
+}
+
+export function parseAmount(value: string): number | null {
+  if (!/^\d{1,7}(?:\.\d{1,2})?$/.test(value)) return null;
+  const [whole, fraction = ''] = value.split('.');
+  const amount = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+  return amount > 0 && Number.isSafeInteger(amount) ? amount : null;
+}
+
+export function sandboxBalance(balance: number, payments: number, contribution: number) {
+  if (![balance, payments, contribution].every(Number.isSafeInteger) || payments < 0 || contribution < 0) {
+    throw new Error('Sandbox values must use integer cents; outflows cannot be negative.');
+  }
+  const result = balance - payments - contribution;
+  if (!Number.isSafeInteger(result)) throw new Error('Sandbox balance exceeds the supported range.');
+  return result;
+}
+
 const mean = (values: number[]) => Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
 
-export function forecast(months: Month[], cutoff: string) {
+export function forecast(months: Month[], cutoff: string, monthlySaving = 0, oneTimeOutflow = 0) {
+  if (![monthlySaving, oneTimeOutflow].every(Number.isSafeInteger) || monthlySaving < 0 || oneTimeOutflow < 0) {
+    throw new Error('Forecast adjustments must be nonnegative integer cents.');
+  }
   const history = months.filter(month => month.month <= cutoff);
   if (history.length < 4 || history.at(-1)?.month !== cutoff) {
     throw new Error('A forecast requires the selected month and at least three preceding months.');
@@ -81,9 +127,9 @@ export function forecast(months: Month[], cutoff: string) {
     mae, backtestCount: errors.length, sensitivity,
     points: [1, 2, 3].map(step => ({
       month: nextMonth(cutoff, step),
-      central: balance + net * step,
-      low: balance + (net - sensitivity) * step,
-      high: balance + (net + sensitivity) * step,
+      central: balance - oneTimeOutflow + (net + monthlySaving) * step,
+      low: balance - oneTimeOutflow + (net + monthlySaving - sensitivity) * step,
+      high: balance - oneTimeOutflow + (net + monthlySaving + sensitivity) * step,
     })),
   };
 }
@@ -124,6 +170,48 @@ export function observations(person: Person, month: Month) {
 
 export interface Answer { text: string; evidence: string; caveat: string }
 
+/**
+ * Extended version: supports both rule-based (local) and live AI responses.
+ * Enable by passing enableLiveAI = true and providing the AI functions.
+ */
+export async function answerQuestionExtended(
+  person: Person,
+  month: Month,
+  question: string,
+  options?: {
+    enableLiveAI?: boolean;
+    currentTab?: string;
+    webContext?: string;
+    onAgentError?: (error: Error) => void;
+  }
+): Promise<Answer> {
+  // If live AI is enabled and we have the context builder, try it first
+  if (options?.enableLiveAI && options?.currentTab) {
+    try {
+      // Dynamically import to avoid circular dependencies
+      const { buildAgentContext, callAgent } = await import('./agent.ts');
+      const context = buildAgentContext(person, month, options.currentTab, options.webContext);
+      const messages = [
+        context,
+        { role: 'user' as const, content: question },
+      ];
+      const response = await callAgent(messages);
+      return response;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      options.onAgentError?.(err);
+      console.warn('[Agent] Live AI failed, falling back to rule-based answers:', err.message);
+      // Fall through to rule-based response
+    }
+  }
+
+  // Fall back to rule-based response (existing logic)
+  return answerQuestion(person, month, question);
+}
+
+/**
+ * Original rule-based question answering (local, no API calls)
+ */
 export function answerQuestion(person: Person, month: Month, question: string): Answer {
   const q = question.toLowerCase().trim();
   const evidence = `${monthLabel(month.month)} · ${month.transactionCount} observed transactions · ${person.userId}`;
@@ -138,7 +226,7 @@ export function answerQuestion(person: Person, month: Month, question: string): 
     return result('I answer for the month selected at the top of the app. Select the period you want, then ask again without a relative date. I do not have live or weekly transaction detail in this demo.');
   }
   if (/safe|afford/.test(q)) return result(
-    'I cannot responsibly say what is safe to spend from this account alone. We would need your upcoming bills, expected payment dates, other accounts, and chosen emergency buffer. The Plan view shows a cash-flow scenario, not a safe-to-spend allowance.');
+    'I cannot responsibly say what is safe to spend from this account alone. We would need your upcoming bills, expected payment dates, other accounts, and chosen emergency buffer. The Spending view shows a cash-flow scenario, not a safe-to-spend allowance.');
   if (/forecast|predict|next three|next month/.test(q)) {
     if (person.monthly.filter(item => item.month <= month.month).length < 4) {
       return result('There is not enough preceding history for this forecast. Choose a month with at least four observed months, so a three-month baseline can be backtested.');

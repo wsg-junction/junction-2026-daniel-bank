@@ -1,4 +1,4 @@
-"""Project only whitelisted aggregates for the public, synthetic demo."""
+"""Project summaries and lazy monthly transaction pages from synthetic person JSONs."""
 
 import json
 from collections import Counter
@@ -19,6 +19,20 @@ def money(value):
     return None if value is None else int(
         (Decimal(value) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     )
+
+
+def project_transactions(person, month):
+    return {
+        "schemaVersion": 1,
+        "synthetic": True,
+        "userId": person["userId"],
+        "month": month,
+        "transactions": [
+            {key: row[key] for key in
+             ("id", "timestamp", "category", "type", "amountCents", "balanceAfterCents")}
+            for row in reversed(person["transactions"]) if row["date"][:7] == month
+        ],
+    }
 
 
 def project(person):
@@ -72,12 +86,25 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     for customer_id in CUSTOMER_IDS:
         source = ROOT / "data" / "people" / f"{customer_id}.json"
-        summary = project(json.loads(source.read_text(encoding="utf-8")))
+        person = json.loads(source.read_text(encoding="utf-8"))
+        summary = project(person)
         payload = json.dumps(summary, separators=(",", ":"), allow_nan=False) + "\n"
         if len(payload.encode("utf-8")) > 40_000:
             raise ValueError(f"Summary exceeds the 40 KB per-person budget: {customer_id}")
         (output / f"{customer_id}.json").write_text(payload, encoding="utf-8")
-        print(f"{customer_id}: {len(payload.encode('utf-8')):,} bytes, no source records")
+        pages = output / "transactions" / customer_id
+        pages.mkdir(parents=True, exist_ok=True)
+        largest = 0
+        for month in summary["monthly"]:
+            page = json.dumps(project_transactions(person, month["month"]),
+                              separators=(",", ":"), allow_nan=False) + "\n"
+            size = len(page.encode("utf-8"))
+            if size > 25_000:
+                raise ValueError(f"Transaction page exceeds 25 KB: {customer_id}/{month['month']}")
+            (pages / f"{month['month']}.json").write_text(page, encoding="utf-8")
+            largest = max(largest, size)
+        print(f"{customer_id}: {len(payload.encode('utf-8')):,} summary bytes; "
+              f"24 lazy transaction pages, largest {largest:,} bytes")
 
 
 if __name__ == "__main__":
