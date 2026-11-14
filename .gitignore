@@ -2,3 +2,8 @@ assets/*.csv
 **/node_modules/**
 dist/**
 .DS_STORE
+*.tsbuildinfo
+.firebase/
+.env
+.env.*
+!.env.example

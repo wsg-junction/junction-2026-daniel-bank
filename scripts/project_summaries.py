@@ -1,0 +1,84 @@
+"""Project only whitelisted aggregates for the public, synthetic demo."""
+
+import json
+from collections import Counter
+from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
+
+from extract_people import CUSTOMER_IDS, ROOT
+
+
+DEMO_PROFILES = {
+    "CUST00115": {"name": "Alex", "initials": "AL", "color": "sage", "description": "Home & longer-term plans"},
+    "CUST00047": {"name": "Robin", "initials": "RO", "color": "lavender", "description": "Everyday spending & transfers"},
+    "CUST00050": {"name": "Noa", "initials": "NO", "color": "peach", "description": "Everyday life & investments"},
+}
+
+
+def money(value):
+    return None if value is None else int(
+        (Decimal(value) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    )
+
+
+def project(person):
+    monthly = []
+    for original in person["monthly"]:
+        month = original["month"]
+        rows = [row for row in person["transactions"] if row["date"].startswith(month)]
+        spending_rows = [row for row in rows if row["amountCents"] < 0
+                         and row["type"] not in ("investment_deposit", "salary_sweep")]
+        balances = {}
+        for account in person["accounts"]:
+            observed = [row for row in person["transactions"]
+                        if row["accountId"] == account["accountId"] and row["date"][:7] <= month]
+            if not observed:
+                raise ValueError(f"No balance for {account['accountId']} at {month}")
+            balances[account["accountId"]] = observed[-1]["balanceAfterCents"]
+        monthly.append({
+            **original,
+            "closingBalanceCents": sum(balances.values()),
+            "balanceObservedAt": max(row["timestamp"] for row in rows),
+            "categoryCounts": dict(Counter(row["category"] for row in spending_rows)),
+        })
+    mortgages = []
+    for mortgage in person["mortgages"]:
+        source = mortgage["source"]
+        mortgages.append({
+            "decision": source["final_decision"],
+            "rejectionReason": source["rejection_reason"],
+            "propertyPriceCents": money(source["final_property_price_eur"]),
+            "requestedLoanCents": money(source["final_requested_loan_eur"]),
+            "equityCents": money(source["final_equity_amount_eur"]),
+            "events": [{"timestamp": event["timestamp"], "type": event["source"]["event_type"]}
+                       for event in mortgage["events"]],
+        })
+    return {
+        "schemaVersion": 1,
+        "userId": person["userId"],
+        "synthetic": True,
+        "demoToday": person["demoToday"],
+        "profile": {**DEMO_PROFILES[person["userId"]], "age": person["profile"]["age"]},
+        "coverage": person["coverage"],
+        "monthly": monthly,
+        "mortgages": mortgages,
+        "limitations": person["dataQuality"]["limitations"],
+        "hasSkippedRows": person["dataQuality"]["selectedCustomerHasSkippedRows"],
+    }
+
+
+def main():
+    output = ROOT / "public" / "demo"
+    output.mkdir(parents=True, exist_ok=True)
+    for customer_id in CUSTOMER_IDS:
+        source = ROOT / "data" / "people" / f"{customer_id}.json"
+        summary = project(json.loads(source.read_text(encoding="utf-8")))
+        payload = json.dumps(summary, separators=(",", ":"), allow_nan=False) + "\n"
+        if len(payload.encode("utf-8")) > 40_000:
+            raise ValueError(f"Summary exceeds the 40 KB per-person budget: {customer_id}")
+        (output / f"{customer_id}.json").write_text(payload, encoding="utf-8")
+        print(f"{customer_id}: {len(payload.encode('utf-8')):,} bytes, no source records")
+
+
+if __name__ == "__main__":
+    main()
