@@ -1,4 +1,5 @@
 import type { Person, Month, Benchmarks } from './data';
+import { psd2AgentContext } from './psd2';
 
 /**
  * AI Agent Service
@@ -141,12 +142,13 @@ export function buildAgentContext(person: Person, month: Month, tab: string, ben
   }
 
   const today = new Date().toISOString().slice(0, 10);
+  const psd2 = psd2AgentContext(person.userId);
   return {
     role: 'system',
     content: `Financial coach, S-Bank demo (synthetic data, not real advice). Be concise, cite numbers, use EUR. Today: ${today}.
 ${person.profile.name}, ${person.profile.age}y, ${tab}, ${month.balanceObservedAt.slice(0, 7)}.
 Balance ${euro(month.closingBalanceCents)}. Avg income ${euro(avgIncome)}/mo, spending ${euro(avgSpending)}/mo.${mtg}${tabDetail}
-Categories: ${allCats}.${peer}`,
+Categories: ${allCats}.${peer}${psd2}`,
   };
 }
 

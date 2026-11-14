@@ -38,6 +38,7 @@ import {
 } from './finance';
 import type { Answer, Basket, Overrides, PriorMessage } from './finance';
 import { Icon } from './Icons';
+import { getPsd2Accounts, psd2InvestmentCents, psd2TotalCents } from './psd2';
 
 const BalanceChart = lazy(() => import('./Charts').then(module => ({ default: module.BalanceChart })));
 const SpendingChart = lazy(() => import('./Charts').then(module => ({ default: module.SpendingChart })));
@@ -162,6 +163,78 @@ function Money({ label, amount, detail, peerAmount, peerLabel }: { label: string
   </div>;
 }
 
+const PSD2_AI_EXPLAIN_DISCONNECTED = `**What is PSD2 open banking?**
+
+Under the EU's PSD2 regulation, you can authorise S-Bank to securely fetch your account data from other Finnish and European banks — Nordea, OP, Danske Bank, and others.
+
+Once connected, your full financial picture appears here: balances, account types, and a combined total across all your banks. This lets your AI coach answer questions like "What is my total savings across all banks?" or "How much could I invest if I pooled everything?"
+
+Your data is fetched with your explicit consent and is never shared with third parties. Tap **+ Add bank** to simulate connecting an account.`;
+
+const PSD2_AI_EXPLAIN_CONNECTED = `**Your connected bank accounts**
+
+These accounts are linked via PSD2 open banking. S-Bank fetches a balance snapshot each time you open the app — balances are not live and may be a few hours old.
+
+The combined total shown here includes your S-Bank balance plus all connected accounts. Your AI coach uses this full picture when you ask about total savings or cross-bank planning.
+
+Tap **Remove banks** at any time to disconnect. Your S-Bank data is unaffected.`;
+
+function Psd2Card({ userId, sBankBalanceCents, psd2Connected, psd2Loading, onConnect, onDisconnect, onAsk }: {
+  userId: string;
+  sBankBalanceCents: number;
+  psd2Connected: boolean;
+  psd2Loading: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onAsk?: (q: string) => void;
+}) {
+  const accounts = getPsd2Accounts(userId);
+  if (!accounts.length) return null;
+  const connectedAccounts = accounts.filter(a => a.status === 'connected');
+  const total = sBankBalanceCents + (psd2Connected ? psd2TotalCents(accounts) : 0);
+
+  return <div className="psd2-card animate-in">
+    <div className="psd2-header">
+      <span className="psd2-title">Connected banks <span className="psd2-badge">PSD2</span></span>
+      <div className="psd2-header-actions">
+        {onAsk && <button className="card-ask-btn psd2-ai-btn" aria-label="Explain PSD2 open banking"
+          onClick={() => onAsk(psd2Connected ? PSD2_AI_EXPLAIN_CONNECTED : PSD2_AI_EXPLAIN_DISCONNECTED)}>
+          <Icon name="sparkle" size={14} />
+        </button>}
+        {psd2Connected
+          ? <button className="psd2-remove" onClick={onDisconnect}>Remove banks</button>
+          : <button className="psd2-add" onClick={onConnect} disabled={psd2Loading} aria-busy={psd2Loading}>
+              {psd2Loading ? <span className="psd2-spinner" aria-label="Connecting…" /> : '+ Add bank'}
+            </button>}
+      </div>
+    </div>
+    {psd2Loading && !psd2Connected && (
+      <div className="psd2-connecting animate-in">
+        <span className="psd2-spinner-inline" />
+        Fetching balances from connected banks…
+      </div>
+    )}
+    {psd2Connected && <>
+      <div className="psd2-accounts">
+        {connectedAccounts.map((a, i) => <div key={i} className="psd2-row animate-in">
+          <span className="psd2-bank">{a.flag} {a.bank}</span>
+          <span className="psd2-type">{a.type}</span>
+          <strong className="psd2-amount" style={{ color: '#176343' }}>{euro(a.balanceCents)}</strong>
+          <span className="psd2-status synced">✓ synced {a.lastSyncedAt}</span>
+        </div>)}
+      </div>
+      <div className="psd2-total">
+        <span>Total across all banks</span>
+        <strong style={{ color: '#176343' }}>{euro(total)}</strong>
+      </div>
+      <p className="note" style={{ marginTop: 4 }}>S-Bank balance + {connectedAccounts.length} connected account{connectedAccounts.length !== 1 ? 's' : ''} · balances are snapshots, not live.</p>
+    </>}
+    {!psd2Connected && !psd2Loading && (
+      <p className="note psd2-cta">Link your other bank accounts via PSD2 to see your full financial picture and let the AI coach answer cross-bank questions.</p>
+    )}
+  </div>;
+}
+
 function InvestmentHeatmap({ person, start, end, onSelect }: {
   person: Person; start: string; end: string; onSelect: (month: string) => void;
 }) {
@@ -250,7 +323,7 @@ function CoachPage({ thread, threads, onSend, onChoose, onHistory, onBack, histo
   </section>;
 }
 
-function BenchmarkCard({ person, benchmarks, months }: { person: Person; benchmarks: Benchmarks; months: Month[] }) {
+function BenchmarkCard({ person, benchmarks, months, onAsk }: { person: Person; benchmarks: Benchmarks; months: Month[]; onAsk?: (q: string) => void }) {
   const peer = peerBenchmark(person, benchmarks);
   if (!peer) return null;
 
@@ -282,6 +355,10 @@ function BenchmarkCard({ person, benchmarks, months }: { person: Person; benchma
         <span className="benchmark-title">You vs. peers aged {peer.label}</span>
         <span className="benchmark-meta">Based on {peer.n} customers · last 3 months · synthetic data</span>
       </div>
+      {onAsk && <button className="card-ask-btn" aria-label="Ask AI about peer comparison"
+        onClick={() => onAsk(`How do I compare to my peers aged ${peer.label}? My savings rate is ${userSavingsRate.toFixed(1)}% vs their ${peer.savingsRate}%, my spending rate is ${userSpendingRate.toFixed(1)}% vs their ${peerSpendingRate.toFixed(1)}%, and my income is ${euro(userAvgIncome)} vs their avg ${euro(peer.avgIncomeCents)}. What should I take from this?`)}>
+        <Icon name="sparkle" size={14} />
+      </button>}
     </div>
     <div className="benchmark-rows">
       <div className="benchmark-row">
@@ -387,7 +464,7 @@ function Transactions({ person, months, mode = 'all' }: { person: Person; months
   </>;
 }
 
-function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk }: { person: Person; months: Month[]; tab: Tab; onChooseMonth: (month: string) => void; benchmarks: Benchmarks | null; onAsk?: (question: string) => void }) {
+function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk, onInjectMessage }: { person: Person; months: Month[]; tab: Tab; onChooseMonth: (month: string) => void; benchmarks: Benchmarks | null; onAsk?: (question: string) => void; onInjectMessage?: (question: string, answer: Answer) => void }) {
   const month = months.at(-1)!;
   const start = months[0].month;
   const spendingBaseline = { ...month, ...averageSpending(months) };
@@ -416,22 +493,44 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk }: { 
   const [contribution, setContribution] = useState(0);
   const [notice, setNotice] = useState('');
   const [investmentView, setInvestmentView] = useState<'calendar' | 'chart'>('calendar');
+  const [psd2Connected, setPsd2Connected] = useState(false);
+  const [psd2Loading, setPsd2Loading] = useState(false);
+  const psd2Accounts = getPsd2Accounts(person.userId);
+  const psd2Bonus = psd2Connected ? psd2TotalCents(psd2Accounts) : 0;
+  const handlePsd2Connect = () => {
+    setPsd2Loading(true);
+    setTimeout(() => { setPsd2Loading(false); setPsd2Connected(true); }, 2200);
+  };
+  const handlePsd2Disconnect = () => { setPsd2Connected(false); };
+  // Effective balance includes PSD2 bonus from connected external accounts
+  const effectiveClosingBalance = month.closingBalanceCents + psd2Bonus;
+  const recent3 = person.monthly.slice(-3);
+  const avgConsumption = Math.round(recent3.reduce((s, m) => s + m.consumptionCents, 0) / recent3.length);
+  const avgIncome = Math.round(recent3.reduce((s, m) => s + m.incomeCents, 0) / recent3.length);
+  const avgSurplus = avgIncome - avgConsumption;
+  const [safeBase, setSafeBase] = useState<'all' | 'salary'>('all');
+  const safeBaseAmount = safeBase === 'all' ? effectiveClosingBalance : month.incomeCents;
+  const safeToSpend = Math.max(0, safeBaseAmount - Math.round(avgConsumption * 0.5));
+  const safeToSave = Math.min(
+    Math.max(0, safeBaseAmount - Math.round(avgConsumption * 1.2)),
+    Math.max(0, avgSurplus * 3),
+  );
   const paymentTotal = payments.reduce((sum, payment) => sum + payment.amount, 0);
   const outflow = paymentTotal + contribution;
-  const balance = sandboxBalance(month.closingBalanceCents, paymentTotal, contribution);
-  // Patch the ending month's balance into person.monthly so every chart picks up the outflow automatically.
-  const sandboxMonthly = outflow > 0
+  const balance = sandboxBalance(effectiveClosingBalance, paymentTotal, contribution);
+  // Patch the ending month's balance into person.monthly so every chart picks up the outflow and PSD2 bonus automatically.
+  const sandboxMonthly = (outflow > 0 || psd2Bonus > 0)
     ? person.monthly.map(m => m.month === month.month
         ? {
             ...m,
             closingBalanceCents: balance,
-            netCashFlowCents: m.netCashFlowCents - outflow,
+            netCashFlowCents: m.netCashFlowCents - outflow + psd2Bonus,
             consumptionCents: m.consumptionCents + outflow,
             surplusBeforeTransfersCents: m.surplusBeforeTransfersCents - outflow,
-            categorySpendingCents: {
+            categorySpendingCents: outflow > 0 ? {
               ...m.categorySpendingCents,
               'Payments (simulated)': outflow,
-            },
+            } : m.categorySpendingCents,
           }
         : m)
     : person.monthly;
@@ -464,10 +563,10 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk }: { 
     {tab === 'accounts' && <>
       <Card title="Account balance" className="animate-in hero-card" onAsk={onAsk && (() => onAsk('Give me a quick summary of my account balance and recent cash flow trend.'))}>
         <div className="account-balance"><Money
-          label={outflow > 0 ? 'Balance after your experiments' : 'Observed account balance'}
-          amount={outflow > 0 ? balance : month.closingBalanceCents}
-          detail={outflow > 0
-            ? `${euro(month.closingBalanceCents)} observed − ${euro(outflow)} in experiments · not a live balance`
+          label={outflow > 0 || psd2Bonus > 0 ? 'Balance after your experiments' : 'Observed account balance'}
+          amount={outflow > 0 || psd2Bonus > 0 ? balance : month.closingBalanceCents}
+          detail={outflow > 0 || psd2Bonus > 0
+            ? `${euro(month.closingBalanceCents)} S-Bank${psd2Bonus > 0 ? ` + ${euro(psd2Bonus)} connected banks` : ''}${outflow > 0 ? ` − ${euro(outflow)} in experiments` : ''} · not a live balance`
             : `Recorded ${month.balanceObservedAt.slice(0, 10)} · not a live balance`} /></div>
         <Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={sandboxMonthly} start={start} cutoff={month.month} /></Suspense>
         <details><summary>Cash flow & mortgage context</summary>
@@ -484,7 +583,14 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk }: { 
           <p className="note">Test payments of {euro(paymentTotal)} and an extra contribution of {euro(contribution)} would leave {euro(balance)}.
             The recorded balance and transaction history are unchanged.</p></details>}
       </Card>
-      {benchmarks && <BenchmarkCard person={person} benchmarks={benchmarks} months={months} />}
+      {benchmarks && <BenchmarkCard person={person} benchmarks={benchmarks} months={months} onAsk={onAsk} />}
+      <Psd2Card userId={person.userId} sBankBalanceCents={month.closingBalanceCents}
+        psd2Connected={psd2Connected} psd2Loading={psd2Loading}
+        onConnect={handlePsd2Connect} onDisconnect={handlePsd2Disconnect}
+        onAsk={onInjectMessage ? (text: string) => onInjectMessage(
+          psd2Connected ? 'Tell me about my connected bank accounts' : 'What is PSD2 open banking?',
+          { text, evidence: 'Based on your PSD2-connected accounts in this demo.', caveat: 'This is an explanation of the PSD2 feature, not a financial recommendation.' }
+        ) : onAsk} />
       <Card title="Transactions" className="animate-in"><Transactions person={person} months={months} /></Card>
     </>}
     {tab === 'spending' && <>
@@ -539,7 +645,17 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk }: { 
             No bill dates, missing obligations, returns or fees are predicted. Negative forecasts are retained.`}</p></details></>
           : <p className="empty">Select a later month. At least four observed months are needed for a forecast and historical check.</p>}
       </Card>
-      {benchmarks && <BenchmarkCard person={person} benchmarks={benchmarks} months={months} />}
+      {benchmarks && <BenchmarkCard person={person} benchmarks={benchmarks} months={months} onAsk={onAsk} />}
+      <Card title="Safe to spend now" className="animate-in" onAsk={onAsk && (() => onAsk('What is safe for me to spend right now without risking next month?'))}>
+        <div className="safe-toggle" role="group" aria-label="Base amount for calculation">
+          <button className={safeBase === 'all' ? 'safe-toggle-btn active' : 'safe-toggle-btn'} onClick={() => setSafeBase('all')}>All savings</button>
+          <button className={safeBase === 'salary' ? 'safe-toggle-btn active' : 'safe-toggle-btn'} onClick={() => setSafeBase('salary')}>This month's salary</button>
+        </div>
+        <div className="account-balance">
+          <Money label="You can spend up to" amount={safeToSpend} />
+        </div>
+        <p className="note">{safeBase === 'all' ? `Balance ${euro(effectiveClosingBalance)}` : `This month's income ${euro(month.incomeCents)}`} minus a half-month buffer {euro(Math.round(avgConsumption * 0.5))} (½ × avg monthly spending). Estimate only — upcoming bills and irregular costs are not known.</p>
+      </Card>
       <details className="basket-details"><summary>Sort spending into three baskets</summary>
         <p className="note">Tentative suggestions, not proven necessities. You decide what fits; ambiguous categories stay unclassified.</p>
         <Suspense fallback={null}><BasketChart totals={basketTotals} /></Suspense>
@@ -602,6 +718,7 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk }: { 
           : <Suspense fallback={<p role="status">Loading chart…</p>}><InvestmentChart months={sandboxMonthly} start={start} cutoff={month.month} /></Suspense>}
         <div className="comparison"><Money label="Deposits in selected months" amount={rangeTotals.deposits} />
           <Money label="Withdrawals in selected months" amount={rangeTotals.withdrawals} /></div>
+        {(() => { const extInv = psd2Connected ? psd2InvestmentCents(getPsd2Accounts(person.userId)) : 0; return extInv > 0 && <div className="psd2-ext-investments"><span>External depot balance (via PSD2)</span><strong style={{ color: '#176343' }}>{euro(extInv)}</strong><small>snapshot · not included in transfer chart above</small></div>; })()}
         <details><summary>Transfers are not investment performance</summary>
           <p className="note">These are transfers, not earnings or everyday spending. No holdings, portfolio value or investment performance are provided.
             Salary sweeps in the selected months: {euro(rangeTotals.sweeps)}. Their destination is unknown; they are not confirmed investment deposits.</p></details>
@@ -618,21 +735,31 @@ function Workbench({ person, months, tab, onChooseMonth, benchmarks, onAsk }: { 
         }}><Icon name="reset" size={16} />Reset contribution</Button>
         <p className="note">Uses {monthLabel(month.month)}'s ending balance. Capped at €1,000 or remaining cash, whichever is lower. Not a recommended allocation. No investment order is placed.</p>
       </Card></div>
+      <Card title="Safe to save this month" className="animate-in" onAsk={onAsk && (() => onAsk('How much could I safely set aside this month without struggling next month?'))}>
+        <div className="safe-toggle" role="group" aria-label="Base amount for calculation">
+          <button className={safeBase === 'all' ? 'safe-toggle-btn active' : 'safe-toggle-btn'} onClick={() => setSafeBase('all')}>All savings</button>
+          <button className={safeBase === 'salary' ? 'safe-toggle-btn active' : 'safe-toggle-btn'} onClick={() => setSafeBase('salary')}>This month's salary</button>
+        </div>
+        <div className="account-balance">
+          <Money label="You could set aside up to" amount={safeToSave} />
+        </div>
+        <p className="note">{safeBase === 'all' ? `Balance ${euro(effectiveClosingBalance)}` : `This month's income ${euro(month.incomeCents)}`} minus next month's expected costs {euro(Math.round(avgConsumption * 1.2))} (avg + 20% buffer), capped at 3× avg surplus {euro(Math.max(0, avgSurplus * 3))}. Estimate only — not investment advice.</p>
+      </Card>
       <Card title="Recorded investment transfers" className="animate-in"><Transactions person={person} months={months} mode="investments" /></Card>
     </>}
   </>;
 }
 
-function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onExpand, onClear, onAsk, loading, loadingPhase, benchmarks }: {
+function Dashboard({ person, tab, period, onPeriodChange, messages, onSend, onExpand, onClear, onAsk, onInjectMessage, loading, loadingPhase, benchmarks }: {
   person: Person; tab: Tab; period: Period; onPeriodChange: (period: Period) => void;
-  messages: ChatMessage[]; onSend: (question: string) => void; onExpand: () => void; onClear: () => void; onAsk: (question: string) => void; loading: boolean; loadingPhase?: 'searching' | 'thinking' | null; benchmarks: Benchmarks | null;
+  messages: ChatMessage[]; onSend: (question: string) => void; onExpand: () => void; onClear: () => void; onAsk: (question: string) => void; onInjectMessage?: (question: string, answer: Answer) => void; loading: boolean; loadingPhase?: 'searching' | 'thinking' | null; benchmarks: Benchmarks | null;
 }) {
   const months = useMemo(() => person.monthly.slice(period.start, period.end + 1), [person, period.start, period.end]);
   return <>
     <h1 className="sr-only">{tabs.find(item => item.id === tab)!.label}</h1>
     <div className="dashboard-layout">
       <div className="dashboard-main">
-        <Workbench key={`${period.start}-${period.end}`} person={person} months={months} tab={tab} benchmarks={benchmarks} onAsk={onAsk} onChooseMonth={month => {
+        <Workbench key={`${period.start}-${period.end}`} person={person} months={months} tab={tab} benchmarks={benchmarks} onAsk={onAsk} onInjectMessage={onInjectMessage} onChooseMonth={month => {
           const index = person.monthly.findIndex(item => item.month === month);
           if (index < 0) throw new Error('Unknown investment calendar month.');
           onPeriodChange({ start: index, end: index });
@@ -856,6 +983,10 @@ export default function App() {
         loading={loadingChat === chatKey} loadingPhase={loadingChat === chatKey ? loadingPhase : null} benchmarks={benchmarks}
         onClear={() => setChats(items => { const next = { ...items }; delete next[chatKey]; return next; })}
         onAsk={question => sendQuestion(question, chatKey, createThread())}
+        onInjectMessage={(question, answer) => {
+          const thread = chats[chatKey] ?? createThread();
+          setChats(items => ({ ...items, [chatKey]: { ...thread, messages: [...(items[chatKey]?.messages ?? thread.messages), { question, answer }] } }));
+        }}
         onExpand={() => {
           const thread = chats[chatKey] ?? createThread();
           setChats(items => ({ ...items, [chatKey]: items[chatKey] ?? thread }));

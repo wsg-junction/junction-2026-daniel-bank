@@ -20,6 +20,7 @@ Pockets lets you explore a synthetic S-Bank transaction history through four foc
 - Range totals: total income, spending, and net cash flow for the selected period
 - Mortgage context if applicable
 - Full searchable transaction history
+- **PSD2 connected banks** — link accounts from other Finnish and European banks; balances roll into a combined total and the AI coach can answer cross-bank questions
 
 ### Spending
 
@@ -30,6 +31,7 @@ Pockets lets you explore a synthetic S-Bank transaction history through four foc
 - **3-month balance forecast** — projects your balance forward using recent average cash flow, with a sensitivity band showing uncertainty
 - Peer benchmarks: compare your income and spending against anonymised customers in the same age group
 - **Three spending baskets** — classify each category as mandatory regular (rent), mandatory irregular (appliance repair), or everyday discretionary (coffee), with a basket breakdown chart
+- **Safe-to-spend tile** — estimates how much you can spend now without dipping below a half-month buffer for upcoming bills
 
 ### Payments
 
@@ -44,8 +46,10 @@ Pockets lets you explore a synthetic S-Bank transaction history through four foc
 - Monthly bar chart of deposits and withdrawals
 - Range totals for deposits, withdrawals, and salary sweeps
 - **Contribution slider** — simulate setting aside a one-time amount and see remaining cash instantly
+- **Safe-to-save tile** — calculates how much you could set aside this month without going below next month's expected costs, based on your recent income/spending average
 - Recorded investment transfer history
 - Live stock ticker (market context, not portfolio data)
+- **External depot balance** — shows connected investment accounts from other banks via PSD2
 
 ---
 
@@ -98,6 +102,7 @@ Five synthetic personas, each with a different financial profile:
 - **Featherless** — hosts the Gemma fallback proxy
 - **Tiger** — converted the raw CSV transaction data to PostgreSQL for data analysis; powers the peer benchmark averages and spending suggestions
 - **Craci** — CI/CD pipeline used to deploy the AI proxy server and backend
+- **context.dev** — web search integration to enhance AI guidance with up-to-date finance knowledge
 - Synthetic transaction data from the Junction 2026 S-Bank dataset
 
 **Backend repo:** https://github.com/wsg-junction/junction-2026-backend-daniel
