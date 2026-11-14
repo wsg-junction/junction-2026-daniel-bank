@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent, ReactNode } from 'react';
+import type { FormEvent, PointerEvent, ReactNode } from 'react';
 import { Avatar, Button, Dropdown, Slider } from '@heroui/react';
+import { Particles } from '@/components/ui/particles';
 import { loadPerson, loadTransactions, PEOPLE } from './data';
 import type { Month, Person, Transaction } from './data';
 import { INSIGHTS } from './insights';
@@ -68,7 +69,7 @@ function PeriodSlider({ months, value, onPreview, onChange }: {
       || values[0] > values[1]) throw new Error('Invalid month range.');
     return { start: values[0], end: values[1] };
   };
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
     const thumbs = (e.currentTarget as HTMLElement).querySelectorAll('[class*="slider__thumb"]');
     if (thumbs.length === 2) {
       const r0 = thumbs[0].getBoundingClientRect();
@@ -630,17 +631,36 @@ export default function App() {
     {tabs.map(item => <a key={item.id} href={`#${item.id}`} className={`nav-item ${tab === item.id ? 'active' : ''}`}
       aria-current={tab === item.id ? 'page' : undefined} onClick={event => { event.preventDefault(); navigate(item.id); }}>
       <Icon name={item.icon} size={21} /><span>{item.label}</span></a>)}</nav>;
-  return <div className="app-shell"><a className="skip-link" href="#main">Skip to content</a>
+  return <><Particles
+      className="fixed inset-0 pointer-events-none"
+      style={{ zIndex: 0 }}
+      accent={0.58}
+      accentColor="oklch(55% 0.1 155)"
+      color="oklch(72% 0.06 155)"
+      count={200}
+      depth={1}
+      direction={60}
+      size={2.3}
+      twinkle={0}
+      intensity={1}
+      drift={0.85}
+      variety={0.44}
+      speed={0.45}
+      softness={0}
+      opacity={1}
+      interactive={false}
+    />
+  <div className="app-shell"><a className="skip-link" href="#main">Skip to content</a>
     <aside className="sidebar"><a className="brand" href="#accounts" aria-label="Pocket home" onClick={event => {
       event.preventDefault(); navigate('accounts');
-    }}><span className="brand-dot" aria-hidden="true" />pocket<span className="brand-period" aria-hidden="true">.</span></a>
+    }}>pocket.</a>
       <p className="brand-caption">Your money. Made clearer.</p>{nav()}
       <p className="sidebar-disclosure">S-Pankki challenge<br />Independent synthetic prototype</p>
     </aside>
     <div ref={workspace} className="workspace"><header ref={appHeader} className="app-header"><div className="topbar">
       <a className="brand header-brand" href="#accounts" aria-label="Pocket home" onClick={event => {
         event.preventDefault(); navigate('accounts');
-      }}>pocket</a>
+      }}>pocket.</a>
       <div className="header-actions">
         <span className="historical-tag">Synthetic demo</span>
         <button className="theme-toggle" aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setDarkMode(v => !v)}>
@@ -693,5 +713,5 @@ export default function App() {
         <Button onPress={() => setRetry(value => value + 1)}>Try again</Button></div>
         : <div className="load-state" role="status">Loading {PEOPLE.find(item => item.id === userId)!.name}'s snapshot…</div>}
     </main></div><div className="mobile-nav">{nav(true)}</div>
-  </div>;
+  </div></>;
 }
