@@ -51,11 +51,10 @@ export function BalanceChart({ months, cutoff, start, prediction = false, monthl
           <XAxis dataKey="month" tick={tick} tickFormatter={labelTick} axisLine={false} tickLine={false} dy={8} minTickGap={14} />
           <YAxis yAxisId="balance" tick={tick} tickFormatter={moneyTick} axisLine={false} tickLine={false} width={44} domain={['auto', 'auto']} />
           {showExpenses && <YAxis yAxisId="expenses" orientation="right" tick={{ ...tick, fill: '#995b56' }} tickFormatter={moneyTick}
-            axisLine={false} tickLine={false} width={42} domain={[0, 'auto']} />}
+            axisLine={false} tickLine={false} width={42} domain={['auto', 'auto']} />}
           <Tooltip formatter={formatTooltip} labelFormatter={label => monthLabel(String(label))}
             contentStyle={tooltipStyle} cursor={{ stroke: '#bfd1c1', strokeDasharray: '3 3' }} />
-          {showExpenses && <Bar yAxisId="expenses" dataKey="expenses" name="Recorded consumption" fill="#ad6460" fillOpacity={0.6}
-            maxBarSize={20} radius={[4, 4, 0, 0]} isAnimationActive={false} />}
+          {showExpenses && <Line yAxisId="expenses" dataKey="expenses" name="Recorded consumption" stroke="#ad6460" strokeWidth={2} dot={false} isAnimationActive={false} />}
           <Area yAxisId="balance" type="monotone" dataKey="observed" name="Observed balance" stroke="#397358" strokeWidth={2.8} fill="url(#balanceFill)"
             dot={visible.length === 1 ? { r: 4, fill: '#397358' } : false} isAnimationActive={false} />
           {model && <Area yAxisId="balance" type="linear" dataKey="range" name="Sensitivity range" stroke="none" fill="#305dc0" fillOpacity={0.13} isAnimationActive={false} />}

@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import {
   Wallet, ChartNoAxesCombined, Send, TrendingUp, ArrowRight, ArrowUp, ArrowDown,
   Leaf, Info, House, MessageCircle, Check, X, ChevronRight, ChevronDown, ChevronUp, CalendarDays, Sparkles, RotateCcw, Expand, ArrowLeft, Minimize2,
+  Sun, Moon,
 } from 'lucide-react';
 
 const icons = {
@@ -12,6 +13,7 @@ const icons = {
   check: Check, close: X, chevron: ChevronRight, reset: RotateCcw,
   dropdown: ChevronDown, calendar: CalendarDays,
   expand: Expand, back: ArrowLeft, collapse: Minimize2, 'chevron-up': ChevronUp,
+  sun: Sun, moon: Moon,
 };
 
 export type IconName = keyof typeof icons;

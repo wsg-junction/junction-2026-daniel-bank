@@ -3,6 +3,8 @@ import type { FormEvent, ReactNode } from 'react';
 import { Avatar, Button, Dropdown, Slider } from '@heroui/react';
 import { loadPerson, loadTransactions, PEOPLE } from './data';
 import type { Month, Person, Transaction } from './data';
+import { INSIGHTS } from './insights';
+import type { InsightKey } from './insights';
 
 function Markdown({ text }: { text: string }) {
   const nodes: ReactNode[] = [];
@@ -335,7 +337,7 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
   return <>
     <p className="sr-only" role="status" aria-live="polite">{notice}</p>
     {tab === 'accounts' && <>
-      <Card title="Account balance">
+      <Card title="Account balance" className="animate-in hero-card">
         <div className="account-balance"><Money label="Observed account balance" amount={month.closingBalanceCents}
           detail={`Recorded ${month.balanceObservedAt.slice(0, 10)} · not a live balance`} /></div>
         <Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={person.monthly} start={start} cutoff={month.month} /></Suspense>
@@ -349,10 +351,10 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
           <p className="note">Test payments of {euro(paymentTotal)} and an extra contribution of {euro(contribution)} would leave {euro(balance)}.
             The recorded balance and transaction history are unchanged.</p></details>}
       </Card>
-      <Card title="Transactions"><Transactions person={person} months={months} /></Card>
+      <Card title="Transactions" className="animate-in"><Transactions person={person} months={months} /></Card>
     </>}
     {tab === 'spending' && <>
-      <Card title={combined.saving ? 'Your spending experiment' : 'Spending mix'} className="spending-card">
+      <Card title={combined.saving ? 'Your spending experiment' : 'Spending mix'} className="animate-in hero-card spending-card">
         <div className="spending-playground">
         <Suspense fallback={<p role="status">Loading chart…</p>}><SpendingChart compact averaged={months.length > 1} month={revisedMonth}
           savings={combined.savings} selected={category} onSelect={setCategory} /></Suspense>
@@ -385,11 +387,11 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
             Each category keeps its own reduction when you switch categories. All reductions repeat monthly; other spending stays unchanged.
             Green negative amounts show hypothetical reductions, not achieved savings or a safe-to-spend amount.</p></details>
       </Card>
-      <Card title="Spending patterns">
+      <Card title="Spending patterns" className="animate-in">
         <Suspense fallback={<p role="status">Loading spending insights…</p>}><SpendingInsights
           months={months} reductions={reductions} selected={category} /></Suspense>
       </Card>
-      <Card title="Three months ahead">
+      <Card title="Three months ahead" className="animate-in">
         {model && baseline ? <><Suspense fallback={<p role="status">Loading chart…</p>}><BalanceChart months={person.monthly} cutoff={month.month}
             start={start} prediction monthlySaving={combined.saving} oneTimeOutflow={outflow} /></Suspense>
           <div className="comparison" role="status" aria-live="polite">
@@ -416,7 +418,7 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
       </details>
     </>}
     {tab === 'payments' && <>
-      <div className="widget-grid"><Card title="Try a payment">
+      <div className="widget-grid"><Card title="Try a payment" className="animate-in hero-card">
         <p className="note">See how a payment would affect your cash. This is a simulation; no money is sent.</p>
         <p className="note">Uses the observed balance at {monthLabel(month.month)}, the ending month chosen on Accounts or Spending.</p>
         <form onSubmit={addPayment} className="payment-form">
@@ -427,7 +429,7 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
           {paymentError && <p id="payment-error" className="error" role="alert">{paymentError}</p>}
           <Button type="submit" className="primary-button"><Icon name="payments" size={18} />Simulate payment</Button>
         </form>
-      </Card><Card title="Payment impact">
+      </Card><Card title="Payment impact" className="animate-in">
         <Money label="Total test payments" amount={paymentTotal} />
         {!payments.length ? <p className="empty">Enter a payment to build your test list and see what would be left afterward.</p>
           : <ul className="sandbox-payments">{payments.map(payment => <li key={payment.id}>
@@ -448,7 +450,7 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
     </>}
     {tab === 'investments' && <>
       <Suspense fallback={null}><StockTickerLazy /></Suspense>
-      <div className="widget-grid"><Card title="Investment transfers">
+      <div className="widget-grid"><Card title="Investment transfers" className="animate-in hero-card">
         <div className="chart-view-controls" role="group" aria-label="Investment visualization">
           <Button variant="outline" aria-pressed={investmentView === 'calendar'} onPress={() => setInvestmentView('calendar')}>Heatmap</Button>
           <Button variant="outline" aria-pressed={investmentView === 'chart'} onPress={() => setInvestmentView('chart')}>Monthly bars</Button>
@@ -460,7 +462,7 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
         <details><summary>Transfers are not investment performance</summary>
           <p className="note">These are transfers, not earnings or everyday spending. No holdings, portfolio value or investment performance are provided.
             Salary sweeps in the selected months: {euro(rangeTotals.sweeps)}. Their destination is unknown; they are not confirmed investment deposits.</p></details>
-      </Card><Card title="Try setting money aside">
+      </Card><Card title="Try setting money aside" className="animate-in">
         <div className="slider-label"><label htmlFor="contribution">One-time contribution</label><strong>{euro(contribution)}</strong></div>
         <input id="contribution" type="range" min="0" max={Math.min(100000, Math.max(0, month.closingBalanceCents - paymentTotal))}
           step="1" value={contribution} aria-valuetext={`${euro(contribution)} one-time contribution`}
@@ -473,7 +475,7 @@ function Workbench({ person, months, tab, onChooseMonth }: { person: Person; mon
         }}><Icon name="reset" size={16} />Reset contribution</Button>
         <p className="note">Uses {monthLabel(month.month)}'s ending balance. Capped at €1,000 or remaining cash, whichever is lower. Not a recommended allocation. No investment order is placed.</p>
       </Card></div>
-      <Card title="Recorded investment transfers"><Transactions person={person} months={months} mode="investments" /></Card>
+      <Card title="Recorded investment transfers" className="animate-in"><Transactions person={person} months={months} mode="investments" /></Card>
     </>}
   </>;
 }
@@ -522,6 +524,8 @@ export default function App() {
   const [returnPage, setReturnPage] = useState<Tab>('accounts');
   const [aiMode, setAiMode] = useState<'auto' | 'local'>('auto');
   const [loadingChat, setLoadingChat] = useState<string | null>(null);
+  const [darkMode, setDarkMode] = useState(() => document.documentElement.getAttribute('data-mode') === 'dark');
+  const sessionVisited = useRef<Set<string>>(new Set());
   const isFinancePage = tab !== 'ai' && tab !== 'ai-history';
   const chatKey = `${userId}:${period.start}:${period.end}:${tab}`;
   const activeThread = activeChat && chats[activeChat]?.userId === userId ? chats[activeChat] : null;
@@ -595,6 +599,29 @@ export default function App() {
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.setAttribute('data-mode', 'dark');
+      localStorage.setItem('pocket-theme', 'dark');
+    } else {
+      document.documentElement.setAttribute('data-mode', 'light');
+      localStorage.setItem('pocket-theme', 'light');
+    }
+  }, [darkMode]);
+  useEffect(() => {
+    if (!isFinancePage || !person) return;
+    const key = `${userId}:${tab}` as InsightKey;
+    if (sessionVisited.current.has(key)) return;
+    sessionVisited.current.add(key);
+    const insight = INSIGHTS[key];
+    if (!insight) return;
+    const thread: ChatThread = {
+      id: chatKey, userId, title: `${tabs.find(item => item.id === tab)!.label} chat`,
+      period: '', endingMonth: person.monthly[period.end]?.month ?? '',
+      messages: [{ question: '✦ Tab insight', answer: { text: insight, evidence: 'Based on your synthetic demo transaction history.', caveat: 'This is synthetic demo data. Not real financial advice.' } }],
+    };
+    setChats(items => ({ ...items, [chatKey]: items[chatKey] ?? thread }));
+  }, [tab, userId, person]);
   const navigate = (value: Page) => {
     setTab(value); window.location.hash = value === 'ai-history' ? 'ai/history' : value;
     window.scrollTo({ top: 0, behavior: 'instant' }); main.current?.focus({ preventScroll: true });
@@ -606,21 +633,19 @@ export default function App() {
   return <div className="app-shell"><a className="skip-link" href="#main">Skip to content</a>
     <aside className="sidebar"><a className="brand" href="#accounts" aria-label="Pocket home" onClick={event => {
       event.preventDefault(); navigate('accounts');
-    }}><span className="brand-icon"><Icon name="pocket" size={24} /></span>pocket.</a>
+    }}><span className="brand-dot" aria-hidden="true" />pocket<span className="brand-period" aria-hidden="true">.</span></a>
       <p className="brand-caption">Your money. Made clearer.</p>{nav()}
       <p className="sidebar-disclosure">S-Pankki challenge<br />Independent synthetic prototype</p>
     </aside>
     <div ref={workspace} className="workspace"><header ref={appHeader} className="app-header"><div className="topbar">
       <a className="brand header-brand" href="#accounts" aria-label="Pocket home" onClick={event => {
         event.preventDefault(); navigate('accounts');
-      }}><Icon name="pocket" size={22} />pocket.</a>
-      {isFinancePage && tab !== 'payments' && person?.userId === userId && <Button variant="ghost" className="period-summary"
-          aria-label={rangeHidden ? 'Show month range' : 'Hide month range'} aria-expanded={!rangeHidden} aria-controls="month-subbar"
-          onPress={() => setRangeHidden(value => !value)}>
-          <span>{monthLabel(person.monthly[displayedPeriod.start].month, true, '2-digit')} – {monthLabel(person.monthly[displayedPeriod.end].month, true, '2-digit')}</span>
-      </Button>}
+      }}>pocket</a>
       <div className="header-actions">
         <span className="historical-tag">Synthetic demo</span>
+        <button className="theme-toggle" aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setDarkMode(v => !v)}>
+          <Icon name={darkMode ? 'sun' : 'moon'} size={16} />
+        </button>
         <Dropdown>
           <Dropdown.Trigger className="ai-mode-trigger" aria-label={`AI mode: ${aiMode === 'auto' ? 'Live AI' : 'Local only'}`}>
             <span className={`ai-mode-badge ${aiMode}`}>{aiMode === 'auto' ? '✦ Live AI' : '⊙ Local'}</span>
@@ -644,6 +669,7 @@ export default function App() {
       </div>
     </div></header>
     {isFinancePage && tab !== 'payments' && person?.userId === userId && <div id="month-subbar" className="range-subbar" hidden={rangeHidden}>
+      <span className="range-label">{monthLabel(person.monthly[displayedPeriod.start].month, true, '2-digit')} – {monthLabel(person.monthly[displayedPeriod.end].month, true, '2-digit')}</span>
       <PeriodSlider months={person.monthly} value={displayedPeriod} onPreview={setPeriodPreview} onChange={value => {
         setPeriodPreview(null); setSelection(value);
       }} />
