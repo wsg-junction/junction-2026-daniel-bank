@@ -127,7 +127,7 @@ function PersonMenu({ userId, onSelect }: { userId: string; onSelect: (id: strin
         }}>
         {PEOPLE.map(person => <Dropdown.Item key={person.id} id={person.id} textValue={person.name}>
           <Avatar className={`demo-avatar ${person.color}`} aria-hidden="true"><Avatar.Fallback>{person.initials}</Avatar.Fallback></Avatar>
-          <div className="person-menu-copy"><strong>{person.name}</strong><span>{person.description}</span></div>
+          <div className="person-menu-copy"><strong>{person.name}</strong><span>{person.description}</span><span className="person-menu-id">{person.id}</span></div>
           {person.id === userId && <Icon name="check" size={16} />}
         </Dropdown.Item>)}
       </Dropdown.Menu>
